@@ -1,0 +1,493 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   PDDC IIMS design system: "Case File, alive"
+   ----------------------------------------------------------------------------
+   PRD §23 asks for a calm, high-legibility surface for long investigative
+   shifts. The chrome (nav, backgrounds, transitions, seals) is cinematic; the
+   data surfaces (tables, forms, report reading) stay quiet. Motion is pure CSS
+   and always collapses under prefers-reduced-motion.
+
+   Semantic tokens are indirected through raw --p-* palette variables so a
+   single data-theme attribute flips the whole app, without Tailwind needing a
+   dark: variant on every element.
+   ========================================================================= */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  /* --- brand ------------------------------------------------------------- */
+  --color-ink: var(--p-ink);
+  --color-ink-deep: var(--p-ink-deep);
+  --color-ink-soft: var(--p-ink-soft);
+  --color-signal: var(--p-signal);
+  --color-signal-dark: var(--p-signal-dark);
+  --color-signal-bright: var(--p-signal-bright);
+
+  /* --- surfaces ---------------------------------------------------------- */
+  --color-canvas: var(--p-canvas);
+  --color-surface: var(--p-surface);
+  --color-surface-raised: var(--p-surface-raised);
+  --color-surface-sunken: var(--p-surface-sunken);
+  --color-line: var(--p-line);
+  --color-line-strong: var(--p-line-strong);
+
+  /* --- text -------------------------------------------------------------- */
+  --color-body: var(--p-body);
+  --color-muted: var(--p-muted);
+  --color-faint: var(--p-faint);
+  --color-on-ink: var(--p-on-ink);
+
+  /* --- risk scale (PRD 5.3) --------------------------------------------- */
+  --color-risk-low: var(--p-risk-low);
+  --color-risk-medium: var(--p-risk-medium);
+  --color-risk-high: var(--p-risk-high);
+  --color-risk-critical: var(--p-risk-critical);
+
+  /* --- classification scale (PRD 7.4) ----------------------------------- */
+  --color-class-public: var(--p-class-public);
+  --color-class-internal: var(--p-class-internal);
+  --color-class-confidential: var(--p-class-confidential);
+  --color-class-restricted: var(--p-class-restricted);
+  --color-class-secret: var(--p-class-secret);
+
+  /* --- status ------------------------------------------------------------ */
+  --color-ok: var(--p-ok);
+  --color-warn: var(--p-warn);
+  --color-danger: var(--p-danger);
+  --color-info: var(--p-info);
+
+  /* --- typography -------------------------------------------------------- */
+  --font-sans: var(--font-public-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-source-serif), ui-serif, Georgia, serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+
+  /* --- motion ------------------------------------------------------------ */
+  --ease-out-expo: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --animate-fade-up: fade-up 0.6s var(--ease-out-expo) both;
+  --animate-fade-in: fade-in 0.4s ease-out both;
+  --animate-scale-in: scale-in 0.3s var(--ease-out-expo) both;
+  --animate-aurora-a: aurora-a 22s ease-in-out infinite alternate;
+  --animate-aurora-b: aurora-b 28s ease-in-out infinite alternate;
+  --animate-aurora-c: aurora-c 34s ease-in-out infinite alternate;
+  --animate-grid-pan: grid-pan 60s linear infinite;
+  --animate-shimmer: shimmer 2.2s linear infinite;
+  --animate-skeleton: skeleton-sheen 1.6s ease-in-out infinite;
+  --animate-seal-draw: seal-draw 1.1s var(--ease-out-expo) forwards;
+  --animate-pulse-ring: pulse-ring 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  --animate-logo-draw: logo-draw 1.6s ease-out forwards;
+  --animate-preloader-exit: preloader-exit 0.6s var(--ease-out-expo) forwards;
+  --animate-dialog-in: dialog-in 0.26s var(--ease-out-expo) both;
+  --animate-sheet-up: sheet-up 0.3s var(--ease-out-expo) both;
+  --animate-timeline-grow: timeline-grow 0.9s var(--ease-out-expo) both;
+  --animate-float: float 8s ease-in-out infinite;
+  --animate-marching: marching 1s linear infinite;
+}
+
+/* ===========================================================  palette: light */
+:root {
+  color-scheme: light;
+
+  --p-ink: #0b1f3a;
+  --p-ink-deep: #061427;
+  --p-ink-soft: #1b3557;
+  --p-signal: #2e9e4f;
+  --p-signal-dark: #1f7239;
+  --p-signal-bright: #46c46c;
+
+  --p-canvas: #f7f6f2;
+  --p-surface: #ffffff;
+  --p-surface-raised: #ffffff;
+  --p-surface-sunken: #efede6;
+  --p-line: #e2dfd6;
+  --p-line-strong: #cbc7bb;
+
+  --p-body: #1f2937;
+  --p-muted: #5b6676;
+  --p-faint: #8a93a1;
+  --p-on-ink: #f7f6f2;
+
+  --p-risk-low: #2e9e4f;
+  --p-risk-medium: #d99a06;
+  --p-risk-high: #e2690f;
+  --p-risk-critical: #c2281f;
+
+  --p-class-public: #4b7a8f;
+  --p-class-internal: #2f6f5e;
+  --p-class-confidential: #b07a12;
+  --p-class-restricted: #c75314;
+  --p-class-secret: #a01b16;
+
+  --p-ok: #2e9e4f;
+  --p-warn: #d99a06;
+  --p-danger: #c2281f;
+  --p-info: #2563a8;
+
+  --glass-bg: rgb(255 255 255 / 0.68);
+  --glass-bg-scrolled: rgb(255 255 255 / 0.86);
+  --glass-border: rgb(11 31 58 / 0.08);
+  --shadow-card: 0 1px 2px rgb(11 31 58 / 0.05), 0 4px 16px rgb(11 31 58 / 0.05);
+  --shadow-raised: 0 2px 4px rgb(11 31 58 / 0.06), 0 12px 32px rgb(11 31 58 / 0.1);
+  --grid-line: rgb(11 31 58 / 0.045);
+}
+
+/* ============================================================  palette: dark
+   Night-shift and surveillance work (PRD 23). Same AA contrast targets. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --p-ink: #0a1526;
+  --p-ink-deep: #050d19;
+  --p-ink-soft: #16294a;
+  --p-signal: #46c46c;
+  --p-signal-dark: #2e9e4f;
+  --p-signal-bright: #6fda90;
+
+  --p-canvas: #080f1c;
+  --p-surface: #0f1a2d;
+  --p-surface-raised: #152339;
+  --p-surface-sunken: #060c17;
+  --p-line: #22324b;
+  --p-line-strong: #33465f;
+
+  --p-body: #e6e9ef;
+  --p-muted: #9aa6b8;
+  --p-faint: #6b7a90;
+  --p-on-ink: #f1f4f8;
+
+  --p-risk-low: #46c46c;
+  --p-risk-medium: #efb52e;
+  --p-risk-high: #f58a3c;
+  --p-risk-critical: #f2584c;
+
+  --p-class-public: #7fb3c8;
+  --p-class-internal: #5fb39c;
+  --p-class-confidential: #e0ad4a;
+  --p-class-restricted: #f58a4c;
+  --p-class-secret: #f2605a;
+
+  --p-ok: #46c46c;
+  --p-warn: #efb52e;
+  --p-danger: #f2584c;
+  --p-info: #5a9fe0;
+
+  --glass-bg: rgb(15 26 45 / 0.62);
+  --glass-bg-scrolled: rgb(15 26 45 / 0.88);
+  --glass-border: rgb(255 255 255 / 0.08);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 16px rgb(0 0 0 / 0.3);
+  --shadow-raised: 0 2px 4px rgb(0 0 0 / 0.45), 0 12px 32px rgb(0 0 0 / 0.45);
+  --grid-line: rgb(255 255 255 / 0.04);
+}
+
+/* Follow the operating system when the user has not chosen explicitly. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --p-ink: #0a1526;
+    --p-ink-deep: #050d19;
+    --p-ink-soft: #16294a;
+    --p-signal: #46c46c;
+    --p-signal-dark: #2e9e4f;
+    --p-signal-bright: #6fda90;
+
+    --p-canvas: #080f1c;
+    --p-surface: #0f1a2d;
+    --p-surface-raised: #152339;
+    --p-surface-sunken: #060c17;
+    --p-line: #22324b;
+    --p-line-strong: #33465f;
+
+    --p-body: #e6e9ef;
+    --p-muted: #9aa6b8;
+    --p-faint: #6b7a90;
+    --p-on-ink: #f1f4f8;
+
+    --p-risk-low: #46c46c;
+    --p-risk-medium: #efb52e;
+    --p-risk-high: #f58a3c;
+    --p-risk-critical: #f2584c;
+
+    --p-class-public: #7fb3c8;
+    --p-class-internal: #5fb39c;
+    --p-class-confidential: #e0ad4a;
+    --p-class-restricted: #f58a4c;
+    --p-class-secret: #f2605a;
+
+    --p-ok: #46c46c;
+    --p-warn: #efb52e;
+    --p-danger: #f2584c;
+    --p-info: #5a9fe0;
+
+    --glass-bg: rgb(15 26 45 / 0.62);
+    --glass-bg-scrolled: rgb(15 26 45 / 0.88);
+    --glass-border: rgb(255 255 255 / 0.08);
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 16px rgb(0 0 0 / 0.3);
+    --shadow-raised: 0 2px 4px rgb(0 0 0 / 0.45), 0 12px 32px rgb(0 0 0 / 0.45);
+    --grid-line: rgb(255 255 255 / 0.04);
+  }
+}
+
+/* ==================================================================== base */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--p-canvas);
+  color: var(--p-body);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--p-signal);
+  color: #ffffff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--p-signal);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* IDs, hashes and exhibit numbers are always monospace (PRD 23). */
+.font-id {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  letter-spacing: -0.01em;
+}
+
+/* Report reading mode uses the serif face. */
+.prose-report {
+  font-family: var(--font-serif);
+  line-height: 1.7;
+}
+
+/* ============================================================== keyframes */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes aurora-a {
+  0% { transform: translate(-8%, -4%) scale(1) rotate(0deg); }
+  100% { transform: translate(12%, 8%) scale(1.2) rotate(18deg); }
+}
+
+@keyframes aurora-b {
+  0% { transform: translate(6%, 10%) scale(1.1) rotate(0deg); }
+  100% { transform: translate(-10%, -6%) scale(0.92) rotate(-14deg); }
+}
+
+@keyframes aurora-c {
+  0% { transform: translate(0%, 6%) scale(0.95); }
+  100% { transform: translate(5%, -8%) scale(1.15); }
+}
+
+/* The evidence-grid motif drifts almost imperceptibly. */
+@keyframes grid-pan {
+  from { background-position: 0 0; }
+  to { background-position: 160px 160px; }
+}
+
+@keyframes shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+@keyframes skeleton-sheen {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.9; }
+}
+
+/* Integrity seal stroke, drawn once when a hash verifies. */
+@keyframes seal-draw {
+  from { stroke-dashoffset: 320; opacity: 0.4; }
+  to { stroke-dashoffset: 0; opacity: 1; }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.85); opacity: 0.7; }
+  70% { transform: scale(1.35); opacity: 0; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+
+@keyframes logo-draw {
+  from { stroke-dashoffset: 520; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes preloader-exit {
+  to { opacity: 0; transform: scale(1.04); visibility: hidden; }
+}
+
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes timeline-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+/* Marching-ants border for an in-flight chain-of-custody transfer. */
+@keyframes marching {
+  to { background-position: 16px 0, -16px 0, 0 -16px, 0 16px; }
+}
+
+/* ============================================================== utilities */
+
+/* Liquid-glass metamorphic chrome (PRD 23 and the stored UI requirement). */
+@utility glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px) saturate(165%);
+  -webkit-backdrop-filter: blur(16px) saturate(165%);
+  transition:
+    background 0.35s var(--ease-out-expo),
+    backdrop-filter 0.35s var(--ease-out-expo),
+    box-shadow 0.35s var(--ease-out-expo),
+    height 0.3s var(--ease-out-expo);
+}
+
+@utility glass-scrolled {
+  background: var(--glass-bg-scrolled);
+  backdrop-filter: blur(24px) saturate(185%);
+  -webkit-backdrop-filter: blur(24px) saturate(185%);
+  box-shadow: var(--shadow-card);
+}
+
+@utility glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--glass-border);
+}
+
+@utility card {
+  background: var(--p-surface);
+  border: 1px solid var(--p-line);
+  box-shadow: var(--shadow-card);
+}
+
+@utility card-raised {
+  background: var(--p-surface-raised);
+  border: 1px solid var(--p-line);
+  box-shadow: var(--shadow-raised);
+}
+
+@utility skeleton {
+  background: var(--p-surface-sunken);
+  animation: var(--animate-skeleton);
+  border-radius: 6px;
+}
+
+/* The evidence-grid background motif. */
+@utility bg-evidence-grid {
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Custody ledger rail: the ruled line each ledger entry hangs from. */
+@utility ledger-rail {
+  background-image: linear-gradient(
+    to bottom,
+    var(--p-line-strong) 0,
+    var(--p-line-strong) 100%
+  );
+  background-size: 1px 100%;
+  background-repeat: no-repeat;
+  background-position: 11px 0;
+}
+
+@utility marching-ants {
+  background-image:
+    linear-gradient(90deg, var(--p-signal) 50%, transparent 0),
+    linear-gradient(90deg, var(--p-signal) 50%, transparent 0),
+    linear-gradient(0deg, var(--p-signal) 50%, transparent 0),
+    linear-gradient(0deg, var(--p-signal) 50%, transparent 0);
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-size: 16px 1px, 16px 1px, 1px 16px, 1px 16px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  animation: var(--animate-marching);
+}
+
+/* Scroll-reveal, driven by an IntersectionObserver in Reveal.tsx. */
+@utility reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.6s var(--ease-out-expo),
+    transform 0.6s var(--ease-out-expo);
+}
+
+@utility is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* Safe-area helpers for the mobile bottom navigation bar. */
+@utility pb-safe {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem);
+}
+
+@utility mb-bottom-nav {
+  margin-bottom: calc(4.25rem + env(safe-area-inset-bottom));
+}
+
+/* Hide scrollbars on horizontal rails (status timeline, tab strips). */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* ============================================ accessibility: reduced motion
+   PRD 23 and the stored UI requirement: every effect must collapse. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Printed reports: drop the chrome, keep the classification banner. */
+@media print {
+  body {
+    background: #ffffff;
+    color: #000000;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
