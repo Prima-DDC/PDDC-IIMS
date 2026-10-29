@@ -1409,6 +1409,155 @@ by inspecting the live platform rather than by reading documentation:
     have done anyway: a button that shows and hides a region has to say which
     state that region is in.
 
+74. **The author of a submitted finding was never told why they could not
+    review it.** The refusal message existed and was correct, but it only
+    rendered when there was nothing at all on offer. An author can still
+    withdraw their own finding, so the offer was never empty, and what they
+    actually saw was a status control holding "withdraw" alone: accepting and
+    returning were simply absent, with nothing saying they exist and are
+    deliberately somebody else's.
+
+    "The screen says why rather than offering a form the server would refuse"
+    is the rule everywhere else in this platform. A control silently missing
+    its two main options is the same failure in a quieter form, and quieter
+    is worse: a user who is told no learns the rule, and a user shown a
+    shorter list learns nothing. The message is now stated whenever it is
+    true, with the withdraw control under it.
+
+75. **The merge permission was held by a role that could not reach it.** PRD
+    8.4 makes resolving a duplicate an "authorised confirmation", so
+    migration 0036 gives `entities:merge` to the Supervisor and the
+    Operations Manager. PRD 16 gives the Operations Manager view only on
+    Subjects/entities, so they hold no `entities:edit`. Resolving a match is
+    two steps on purpose, deciding then merging, because a single button
+    would leave the merge log saying only that somebody pressed a button. The
+    decision step, screen and action both, was gated on `entities:edit`.
+
+    So the platform granted the merge to the one non-administrator role that
+    could never perform the step that has to come first. Both halves are now
+    satisfied by either permission, through a new `requireAnyPermission` that
+    makes each caller name exactly which permissions it accepts.
+
+    **This is the third instance of one pattern and it is worth naming.** A
+    feature is built, a permission is granted for it, and the two are keyed
+    to each other through a third thing that does not line up:
+    `reports:export` was checked and never seeded (entry 72), the management
+    screen was therefore administrator-only, and here a granted permission
+    sits behind a gate naming a different one. Each was silent, because a
+    permission check that cannot pass fails closed and a UI that renders
+    nothing looks exactly like a UI correctly showing you nothing.
+
+    `tests/integration/permission-catalogue.test.ts` catches the first shape,
+    a gate naming a permission that does not exist. It cannot catch this one:
+    both permissions here exist. What catches this one is an end-to-end
+    journey that performs the act as the role PRD 16 gives it to, which is
+    why the intel journey runs as two people and why that is worth the time
+    it costs.
+
+76. **The side navigation could not be scrolled, so its last sections were
+    unreachable.** Reported from use, not found by a test, and the tests
+    could not have found it: every one of them navigates by URL, so no test
+    has ever needed to click a sidebar entry that was off-screen.
+
+    `sticky` with no height is the trap. The list pinned itself below the top
+    bar and stayed there, so scrolling the page moved the main column while
+    the entries past the fold stayed exactly where they were, rendered and
+    permanently out of reach. There was no scrollbar and no clipping, so
+    nothing looked broken; the sections were simply missing.
+
+    Seventeen entries at roughly 38px is about 670px of list below a 64px top
+    bar, so any browser window shorter than about 740px lost the bottom of
+    it, which is an ordinary laptop with ordinary browser chrome. It also got
+    worse with every milestone, for the same reason the prefetch storm did:
+    each one adds a register to the sidebar.
+
+    Now constrained to `calc(100dvh-4rem)` and scrollable, with
+    `overscroll-contain` so reaching the end of the list does not start
+    scrolling the page behind it. The mobile "More" sheet was already correct
+    at `max-h-[80dvh]`, and the case tab bar already handles its own
+    horizontal overflow, so this was desktop chrome only.
+
+    Worth noting what this says about the test suite: it exercises what the
+    platform does, thoroughly, and almost nothing about whether the chrome
+    can be operated at a given window size. The manual responsive pass in the
+    plan is not a formality.
+
+77. **A merge was neither reversible nor non-destructive, and PRD 8.4
+    requires both.** Three defects in one operation, found in sequence by one
+    end-to-end step. Taken together they mean **no entity merge had ever
+    completed in this platform**, and the parts that would have run were
+    losing data that could not be recovered.
+
+    **It could not run at all.** `iims_app` holds DELETE on the four genuine
+    join tables and on nothing else, because 0036's privilege comment sets
+    the rule plainly: "everything that carries a history keeps the no-erasure
+    rule." The merge hard-deleted from `intel.case_subjects`, which is not a
+    join table. So every merge failed with "permission denied for table
+    case_subjects" partway through, and rolled back. Nothing was corrupted
+    and nobody could merge a duplicate. Migration 0047 granted that one
+    table; migration 0048 revoked it again, which is the better fix and is
+    described below.
+
+    **It destroyed what it could not move.** A row the survivor could not
+    take was deleted: an alias it already had, a case both records were
+    subjects of, a finding both were linked to. The case subject was the
+    worst of them, because it carried the loser's own `subject_role` and
+    `relationship_to_case`. Two roles on one case is a disagreement between
+    two pieces of recorded work, and the platform settled it by keeping
+    whichever row the survivor happened to own, and said nothing.
+
+    **And a reversal did not reverse it.** 0036's own comment on
+    `intel.entity_merges` states the intention that was missed: "`moved`
+    records exactly what was reassigned, so a reversal puts it back rather
+    than guessing." What `moved` holds is counts. A count cannot be put back.
+    So a reversal restored the two records, their names and the match flag,
+    and left every statement, case link, relationship and finding link on the
+    survivor, then reported success. Aliases were the sole exception, and
+    only because the merge writes a breadcrumb into each one.
+
+    That last one is the serious one. `information` is a hop in the chain
+    this platform exists to keep intact. After a merge and a reversal,
+    statements gathered against one company stayed attributed to another, on
+    exactly the two records somebody had just decided were NOT the same
+    thing. A finding citing that information still resolved, so it read as
+    sound while pointing at the wrong company.
+
+    **The fix, and a rejected one worth recording.** The first instinct was
+    to refuse a merge that would have to destroy something. 0036's comment
+    makes the right objection: two records being subjects of one case is
+    evidence they are the same thing, so a merge failing there would fail
+    exactly when it is most obviously correct. The better answer is to stop
+    deleting, and the tables already had what that needs.
+    `intel.case_subjects` is unique on `(case_id, entity_id)` and carries
+    `removed_at`, `removed_by`, `removal_reason` and a restore path, so the
+    loser's row is withdrawn where it stands with its role and note intact.
+    `intel.finding_links` has no unique constraint at all, so nothing ever
+    required its delete; its rows are simply all repointed. A colliding alias
+    stays on the loser, which still exists as the pointer PRD 8.4 requires,
+    so nothing is orphaned.
+
+    Migration 0048 adds `intel.entity_merge_rows`, which records every row a
+    merge repointed or withdrew by identity and column. The reversal walks it
+    and marks each entry restored rather than erasing it. Table and column
+    names come from that table's CHECK constraints and are matched against
+    literals in the reversal, never interpolated as identifiers.
+
+    **Why the tests did not catch any of it.** The integration test was
+    called "merges reversibly, moving what it says it moved and deleting no
+    record" and checked none of those things after a reversal: it asserted
+    the loser's status, the reopened flag and the removal of the former-name
+    alias, all of which the reversal could already restore, and stopped. It
+    passed throughout. The three application-level checks passed too, so no
+    amount of reading the permission model would have shown the grant gap;
+    the refusal came from Postgres six tables into the operation and the
+    screen said "Something went wrong saving that." It was found by reading
+    the web server's own stderr, which is now the second time in this build
+    that was the only thing that would do it.
+
+    The test now asserts the round trip: that the withdrawn subject keeps its
+    role and comes back, that a statement moves to the survivor and returns
+    to the loser, and that the move log ends fully restored.
+
 ---
 
 ## Performance, measured

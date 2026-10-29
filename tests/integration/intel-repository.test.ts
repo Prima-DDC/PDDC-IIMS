@@ -552,10 +552,185 @@ suite("entity resolution", () => {
         "Delta Logistics Ghana Limited",
       );
 
+      /*
+       * And everything the merge MOVED is back on the record it came from.
+       *
+       * This is what the test was named for and did not check. It asserted
+       * the loser's status, the flag and the former-name alias, all of which
+       * the reversal restored from data it could identify, and stopped
+       * there. Meanwhile the case subject and the alias stayed on the
+       * survivor, because the merge recorded only how many rows it had moved
+       * and not which, so the reversal had nothing to work from. The test
+       * passed throughout.
+       */
+      expect(survivorAfter!.aliases.map((a) => a.alias)).not.toContain("DLG");
+      expect(survivorAfter!.caseCount).toBe(0);
+
+      expect(restored!.aliases.map((a) => a.alias)).toContain("DLG");
+
+      const subjectsBack = await subjects.forCase(record.id);
+      expect(subjectsBack.map((s) => s.entityId)).toEqual([lose.id]);
+
       // The decision that authorised the merge is reopened rather than left
       // standing, so somebody has to decide it again.
       const flags = await resolution.flags({ entityId: keep.id });
       expect(flags[0].status).toBe("undecided");
+    });
+  });
+
+  /**
+   * The case both records are already subjects of (PRD 8.4).
+   *
+   * The hard one, and the one that was silently destructive. case_subjects is
+   * unique on (case_id, entity_id), so the loser's row cannot move onto a
+   * case the survivor is already a subject of. It used to be deleted, taking
+   * the loser's own subject_role and relationship_to_case with it, and a
+   * reversal could not put it back because nothing recorded that it had ever
+   * existed.
+   *
+   * Two roles on one case is a disagreement between two pieces of recorded
+   * work. The platform now withdraws the row where it stands instead, so the
+   * role and the note survive, and gives it back on reversal.
+   */
+  it("withdraws rather than destroys a subject row it cannot move, and restores it", async () => {
+    await inRolledBackTx(async (tx) => {
+      const actor = actorFor(await seedUser(tx, ["supervisor"]));
+      const entities = createEntityRepository(actor, tx);
+      const subjects = createCaseSubjectRepository(actor, tx);
+      const resolution = createResolutionRepository(actor, tx);
+      const sources = createSourceRepository(actor, tx);
+      const information = createInformationRepository(actor, tx);
+
+      const record = await seedCase(tx, actor, "E2E Intel Conflict Ltd");
+      const keep = await entities.create({
+        entityType: "company",
+        name: "Meridian Freight Ltd",
+        classification: "CONFIDENTIAL",
+      });
+      const lose = await entities.create({
+        entityType: "company",
+        name: "Meridian Freight Ghana Limited",
+        classification: "CONFIDENTIAL",
+      });
+
+      // BOTH on the same case, in different roles. This is the collision.
+      await subjects.add({
+        caseId: record.id,
+        entityId: keep.id,
+        subjectRole: "primary_subject",
+      });
+      await subjects.add({
+        caseId: record.id,
+        entityId: lose.id,
+        subjectRole: "related_party",
+        relationshipToCase: "Invoiced under the trading name",
+      });
+
+      // And a statement attributed to the loser, which is a hop in the chain
+      // the platform exists to keep intact.
+      const source = await sources.create({
+        caseId: record.id,
+        sourceType: "financial_record",
+        description: "Bank statements for the account under investigation.",
+        dateObtained: YESTERDAY,
+        obtainedBy: actor.userId,
+        sourceReliability: "reliable",
+        classification: "CONFIDENTIAL",
+      });
+      const statement = await information.create({
+        caseId: record.id,
+        sourceId: source.id,
+        entityId: lose.id,
+        dateObtained: YESTERDAY,
+        description: "Three payments with no purchase order reference.",
+        informationCredibility: "probable",
+        confidence: "moderate",
+        classification: "CONFIDENTIAL",
+      });
+
+      const flag = await resolution.flag({
+        entityAId: keep.id,
+        entityBId: lose.id,
+        flagType: "potential_duplicate",
+        similarityScore: 0.81,
+      });
+      await resolution.decide({
+        flagId: flag.id,
+        status: "same_entity",
+        reason: "One company invoicing under two names, same registration.",
+      });
+
+      const merge = await resolution.merge({
+        survivingEntityId: keep.id,
+        mergedEntityId: lose.id,
+        reason: "The trading name was recorded as a separate company.",
+      });
+
+      // The case lists the survivor once, not twice and not the merged
+      // record.
+      const onCase = await subjects.forCase(record.id);
+      expect(onCase.map((s) => s.entityId)).toEqual([keep.id]);
+
+      // But the loser's row still exists, withdrawn, with its role and its
+      // note intact. Nothing was destroyed, which is PRD 8.4's second
+      // promise and the one that was being broken.
+      const [withdrawn] = await tx<
+        {
+          subject_role: string;
+          relationship_to_case: string | null;
+          removed_at: Date | null;
+        }[]
+      >`
+        select subject_role, relationship_to_case, removed_at
+        from intel.case_subjects
+        where case_id = ${record.id}::uuid and entity_id = ${lose.id}::uuid
+      `;
+      expect(withdrawn).toBeDefined();
+      expect(withdrawn.removed_at).not.toBeNull();
+      expect(withdrawn.subject_role).toBe("related_party");
+      expect(withdrawn.relationship_to_case).toBe(
+        "Invoiced under the trading name",
+      );
+
+      // The statement moved to the survivor.
+      const [moved] = await tx<{ entity_id: string }[]>`
+        select entity_id from intel.information where id = ${statement.id}::uuid
+      `;
+      expect(moved.entity_id).toBe(keep.id);
+
+      /* ------------------------------------------------- and reversed */
+
+      await resolution.reverse({
+        mergeId: merge.id,
+        reason: "Two genuinely different companies; the registrations differ.",
+      });
+
+      // The withdrawn row is a live subject again, still in its own role.
+      const onCaseAfter = await subjects.forCase(record.id);
+      expect(onCaseAfter.map((s) => s.entityId).sort()).toEqual(
+        [keep.id, lose.id].sort(),
+      );
+      expect(
+        onCaseAfter.find((s) => s.entityId === lose.id)!.subjectRole,
+      ).toBe("related_party");
+
+      // And the statement is attributed to the record it was always about.
+      // Getting this wrong is worse than a missing feature: a finding citing
+      // it would still resolve, so it would read as sound while pointing at
+      // the wrong company.
+      const [back] = await tx<{ entity_id: string }[]>`
+        select entity_id from intel.information where id = ${statement.id}::uuid
+      `;
+      expect(back.entity_id).toBe(lose.id);
+
+      // The log of what moved is marked restored rather than erased.
+      const [rows] = await tx<{ total: string; restored: string }[]>`
+        select count(*) as total, count(restored_at) as restored
+        from intel.entity_merge_rows
+        where merge_id = ${merge.id}::uuid
+      `;
+      expect(Number(rows.total)).toBeGreaterThan(0);
+      expect(rows.restored).toBe(rows.total);
     });
   });
 

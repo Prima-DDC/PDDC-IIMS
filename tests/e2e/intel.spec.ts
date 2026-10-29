@@ -472,42 +472,90 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       expect(options.join(" ")).not.toContain("Draft");
     });
 
-    await test.step("the manager decides the duplicate, then merges it reversibly", async () => {
+    /*
+     * Resolving a duplicate needs somebody who can edit the entity register,
+     * because that is what a merge does to it. PRD 16 gives that to the
+     * Supervisor, and the Administrator has it through the wildcard; the
+     * Operations Manager has `V` and so has neither the decision nor the
+     * merge. There is no supervisor fixture, so the administrator stands in
+     * for PRD 8.4's "authorised confirmation".
+     */
+    const adminCtx = await browser.newContext({
+      storageState: "playwright/.auth/admin.json",
+    });
+    const admin = await adminCtx.newPage();
+
+    await test.step("the manager, with view only on entities, is offered neither", async () => {
+      // PRD 16 gives the Operations Manager `V` on Subjects/entities. A merge
+      // rewrites aliases, case subjects, relationships, information and
+      // finding links, so it is an edit of the register and not theirs.
+      // Migration 0046 removed the `entities:merge` grant that said otherwise
+      // and asserts that merge now implies edit, because a role holding merge
+      // without edit gets a control that works until row-level security
+      // refuses it six tables in.
       await page.goto(entityUrl);
       await settled(page);
 
-      const duplicates = panel(page, "Duplicates and matches");
+      const theirs = panel(page, "Duplicates and matches");
+      await expect(theirs.getByText(/Awaiting a decision/i)).toBeVisible();
+      await expect(
+        theirs.locator("select[id^='match-decision-']"),
+      ).toHaveCount(0);
+      await expect(
+        theirs.getByRole("button", { name: /^Merge ENT-/i }),
+      ).toHaveCount(0);
+    });
+
+    await test.step("an administrator decides the duplicate, then merges it reversibly", async () => {
+      await admin.goto(entityUrl);
+      await settled(admin);
+
+      const duplicates = panel(admin, "Duplicates and matches");
       await duplicates
         .locator("select[id^='match-decision-']")
         .selectOption("same_entity");
       await duplicates
         .locator("input[id^='match-reason-']")
         .fill("Same registration number and the same registered address.");
-      await duplicates.getByRole("button", { name: /record the decision/i }).click();
+      await duplicates
+        .getByRole("button", { name: /record the decision/i })
+        .click();
       await expect(
         duplicates.getByText(/Merging them is the next, separate step/i),
       ).toBeVisible();
 
       // Only now is the merge offered, which is PRD 8.4's "authorised
       // confirmation": the log records the reasoning, not a button press.
-      await page.goto(entityUrl);
-      await settled(page);
-      const merge = panel(page, "Duplicates and matches");
+      await admin.goto(entityUrl);
+      await settled(admin);
+      const merge = panel(admin, "Duplicates and matches");
       await merge
         .locator("input[id^='merge-reason-']")
         .fill("One company recorded twice, under its trading name.");
-      page.once("dialog", (dialog) => dialog.accept());
+      admin.once("dialog", (dialog) => dialog.accept());
       await merge.getByRole("button", { name: /^Merge ENT-/i }).click();
+
+      // Asserted on the page the merge leaves behind, not on the banner.
+      // A successful merge takes the flag out of the undecided state, so the
+      // block holding the success message is legitimately gone by the time
+      // the re-render lands: the confirmation that lasts is the record
+      // itself. Waiting for the banner here would be waiting for something
+      // the design removes on purpose.
+      await admin.goto(entityUrl);
+      await settled(admin);
       await expect(
-        merge.getByText(/Nothing was deleted, and this can be reversed/i),
-      ).toBeVisible();
+        panel(admin, "Duplicates and matches").getByRole("button", {
+          name: /^Merge ENT-/i,
+        }),
+      ).toHaveCount(0);
+      await expect(panel(admin, "Merge history")).toBeVisible();
     });
 
     await test.step("the merge log says what it moved, and the merge is reversed", async () => {
-      await page.goto(entityUrl);
-      await settled(page);
+      await admin.goto(entityUrl);
+      await settled(admin);
 
-      const history = panel(page, "Merge history");
+      const history = panel(admin, "Merge history");
       await expect(history.getByText(/In force/i)).toBeVisible();
       // The log says what was moved, which is what makes a reversal possible
       // rather than a guess.
@@ -516,21 +564,21 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       await history
         .locator("input[id^='reverse-']")
         .fill("The registration numbers differ after all; two companies.");
-      page.once("dialog", (dialog) => dialog.accept());
+      admin.once("dialog", (dialog) => dialog.accept());
       await history.getByRole("button", { name: /reverse this merge/i }).click();
       await expect(
         history.getByText(/stands on its own again, marked disputed/i),
       ).toBeVisible();
 
-      await page.goto(entityUrl);
-      await settled(page);
+      await admin.goto(entityUrl);
+      await settled(admin);
       await expect(
-        panel(page, "Merge history").getByText(/Reversed/i).first(),
+        panel(admin, "Merge history").getByText(/Reversed/i).first(),
       ).toBeVisible();
       // The decision that authorised it is reopened rather than left
       // standing, so somebody has to make it again.
       await expect(
-        panel(page, "Duplicates and matches")
+        panel(admin, "Duplicates and matches")
           .getByText(/Could not be decided/i)
           .first(),
       ).toBeVisible();
@@ -551,6 +599,8 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       await expect(page.getByText(/Nothing bears this out yet/i)).toHaveCount(0);
     });
 
+    await admin.close().catch(() => {});
+    await adminCtx.close();
     await analyst.close();
   });
 });

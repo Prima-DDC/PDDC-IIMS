@@ -1,7 +1,6 @@
 import { globSync, readFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import postgres from "postgres";
-import { SUPABASE_ROOT_CA } from "@/lib/db/supabase-ca";
+import { testSql } from "../helpers/sql";
 
 /**
  * Every permission the code gates on must exist in the catalogue.
@@ -29,19 +28,22 @@ import { SUPABASE_ROOT_CA } from "@/lib/db/supabase-ca";
  * new gate has to be either in the catalogue or on this list, and adding it
  * to this list is a decision somebody has to write down.
  *
- * Requires IIMS_APP_DB_URL. Run with:
+ * Connects as `postgres`, not as `iims_app`. This asserts the SHAPE of the
+ * catalogue, which is configuration, and `iam.permissions` and
+ * `iam.role_permissions` are behind row-level security keyed on the acting
+ * user. A connection with no actor GUCs set is denied every row, correctly
+ * and silently, so running this as the application role returned an empty
+ * catalogue and reported every gate in the codebase as undefined. The first
+ * version of this file did exactly that. Assertions about what the
+ * application role can REACH belong in app-role-containment.test.ts.
+ *
+ * Requires SUPABASE_DB_URL. Run with:
  *   npx vitest run --mode development tests/integration
  */
 
-const url = process.env.IIMS_APP_DB_URL;
+const url = process.env.SUPABASE_DB_URL;
 
-const sql = postgres(url ?? "", {
-  prepare: false,
-  max: 1,
-  ssl: { ca: SUPABASE_ROOT_CA, rejectUnauthorized: true },
-  connection: { application_name: "pddc-iims-test" },
-  onnotice: () => {},
-});
+const sql = testSql();
 
 afterAll(async () => {
   await sql.end({ timeout: 5 });

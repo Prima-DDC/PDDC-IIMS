@@ -46,7 +46,21 @@ export function SideNav({ entries }: { entries: NavEntry[] }) {
       aria-label="Sections"
       className="hidden w-56 shrink-0 border-r border-line md:block"
     >
-      <ul className="sticky top-16 space-y-0.5 p-3">
+      {/*
+        Constrained to the viewport and scrollable, because the list is
+        already taller than a laptop window. There are seventeen entries at
+        roughly 38px each, so about 670px of list below a 64px top bar, and
+        a browser window shorter than ~740px could not show the last of
+        them. `sticky` without a height is the trap: the list pins itself
+        below the top bar and stays there, so page scrolling moves the main
+        column while the entries past the fold stay exactly where they are,
+        rendered and permanently out of reach. Nothing looks broken, the
+        sections are simply missing.
+
+        `overscroll-contain` keeps a scroll that reaches the end of this list
+        from carrying on into the page behind it.
+      */}
+      <ul className="sticky top-16 max-h-[calc(100dvh-4rem)] space-y-0.5 overflow-y-auto overscroll-contain p-3">
         {entries.map((entry) => {
           const Icon = NAV_ICONS[entry.icon];
           const active = isActive(entry.href);

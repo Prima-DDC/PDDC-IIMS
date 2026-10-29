@@ -1442,19 +1442,64 @@ export function createResolutionRepository(
           throw new IntelError("not_found", "That record no longer exists.");
         }
 
-        const aliases = await sql`
-          update intel.entity_aliases set entity_id = ${keep}::uuid
-          where entity_id = ${lose}::uuid
-            and normalised_alias not in (
-              select normalised_alias from intel.entity_aliases
-              where entity_id = ${keep}::uuid
-            )
-        `;
-        // The ones that collided are dropped rather than left pointing at a
-        // merged record: the survivor already has them.
-        await sql`
-          delete from intel.entity_aliases where entity_id = ${lose}::uuid
-        `;
+        /*
+         * Every row this merge touches is recorded by identity, because that
+         * is the only thing a reversal can work from. `moved` below keeps the
+         * counts, which are a summary for somebody reading the log; a count
+         * cannot be put back. See migration 0048.
+         */
+        const touched: Array<{
+          table: string;
+          rowId: string;
+          column: string;
+          action: "repointed" | "withdrawn";
+        }> = [];
+
+        const note = (
+          rows: ReadonlyArray<{ id: string }>,
+          table: string,
+          column: string,
+          action: "repointed" | "withdrawn",
+        ) => {
+          for (const row of rows) {
+            touched.push({ table, rowId: row.id, column, action });
+          }
+          return rows.length;
+        };
+
+        /*
+         * NOTHING HERE DELETES ANYTHING, and that is the whole design.
+         *
+         * Each of these used to move what it could and destroy the remainder:
+         * an alias the survivor already had, a case both records were
+         * subjects of, a finding both were linked to. Every one of those was
+         * a row a reversal could never put back, so PRD 8.4's "reversible"
+         * and "never delete source records" were both untrue.
+         *
+         * The rule now is that a row the survivor cannot take simply stays
+         * where it is. The loser's record still exists after a merge, as the
+         * pointer PRD 8.4 requires it to remain, so a row left on it is not
+         * orphaned: it is still attached to the thing it was always about,
+         * and a reversal finds it exactly there.
+         */
+        const aliases = note(
+          await sql<{ id: string }[]>`
+            update intel.entity_aliases set entity_id = ${keep}::uuid
+            where entity_id = ${lose}::uuid
+              and normalised_alias not in (
+                select normalised_alias from intel.entity_aliases
+                where entity_id = ${keep}::uuid
+              )
+            returning id
+          `,
+          "entity_aliases",
+          "entity_id",
+          "repointed",
+        );
+        // A colliding alias is left on the loser. The survivor already has
+        // that spelling, so a search finds it either way, and moving it is
+        // impossible in any case: entity_aliases is unique on
+        // (entity_id, normalised_alias).
 
         const nameAlias = await sql`
           insert into intel.entity_aliases (
@@ -1467,49 +1512,118 @@ export function createResolutionRepository(
           on conflict (entity_id, normalised_alias) do nothing
         `;
 
-        const subjects = await sql`
-          update intel.case_subjects set entity_id = ${keep}::uuid
-          where entity_id = ${lose}::uuid
-            and case_id not in (
-              select case_id from intel.case_subjects where entity_id = ${keep}::uuid
-            )
-        `;
-        await sql`
-          delete from intel.case_subjects where entity_id = ${lose}::uuid
-        `;
+        const subjects = note(
+          await sql<{ id: string }[]>`
+            update intel.case_subjects set entity_id = ${keep}::uuid
+            where entity_id = ${lose}::uuid
+              and case_id not in (
+                select case_id from intel.case_subjects where entity_id = ${keep}::uuid
+              )
+            returning id
+          `,
+          "case_subjects",
+          "entity_id",
+          "repointed",
+        );
+
+        /*
+         * A case both records were subjects of.
+         *
+         * The row cannot move, because case_subjects is unique on
+         * (case_id, entity_id) and the survivor already occupies that slot.
+         * It used to be deleted, which took the loser's own subject_role and
+         * relationship_to_case with it. Two roles on one case is a genuine
+         * disagreement between two pieces of recorded work, and discarding
+         * one of them silently is not the platform's decision to make.
+         *
+         * So it is withdrawn where it stands, using the removal this table
+         * already has. The role and the note survive and stay readable in
+         * that case's history, the case stops listing a merged record among
+         * its live subjects, and a reversal has something to restore.
+         */
+        note(
+          await sql<{ id: string }[]>`
+            update intel.case_subjects set
+              removed_at = now(), removed_by = ${actor.userId}::uuid,
+              removal_reason = ${`merged into ${keep}, which is already a subject of this case`},
+              updated_by = ${actor.userId}::uuid
+            where entity_id = ${lose}::uuid and removed_at is null
+            returning id
+          `,
+          "case_subjects",
+          "removed_at",
+          "withdrawn",
+        );
 
         // A relationship whose other end is the survivor would become a loop,
-        // which the table refuses, so it goes.
-        await sql`
-          delete from intel.relationships
-          where (from_entity_id = ${lose}::uuid and to_entity_id = ${keep}::uuid)
-             or (from_entity_id = ${keep}::uuid and to_entity_id = ${lose}::uuid)
-        `;
-        const relationshipsFrom = await sql`
-          update intel.relationships set from_entity_id = ${keep}::uuid
-          where from_entity_id = ${lose}::uuid
-        `;
-        const relationshipsTo = await sql`
-          update intel.relationships set to_entity_id = ${keep}::uuid
-          where to_entity_id = ${lose}::uuid
-        `;
+        // which the table refuses, so it is withdrawn.
+        //
+        // Soft-deleted, not deleted. `intel.relationships` carries
+        // `deleted_at` and `iims_app` is deliberately granted no DELETE on
+        // it, because a relationship is a record somebody asserted and PRD
+        // 8.4 requires a merge to be reversible. A hard delete here would
+        // have been a row the reversal could never put back, and it would
+        // have failed outright for want of the privilege.
+        note(
+          await sql<{ id: string }[]>`
+            update intel.relationships
+            set deleted_at = now(), updated_by = ${actor.userId}::uuid
+            where deleted_at is null
+              and ((from_entity_id = ${lose}::uuid and to_entity_id = ${keep}::uuid)
+                or (from_entity_id = ${keep}::uuid and to_entity_id = ${lose}::uuid))
+            returning id
+          `,
+          "relationships",
+          "deleted_at",
+          "withdrawn",
+        );
+        const relationshipsFrom = note(
+          await sql<{ id: string }[]>`
+            update intel.relationships set from_entity_id = ${keep}::uuid
+            where from_entity_id = ${lose}::uuid
+            returning id
+          `,
+          "relationships",
+          "from_entity_id",
+          "repointed",
+        );
+        const relationshipsTo = note(
+          await sql<{ id: string }[]>`
+            update intel.relationships set to_entity_id = ${keep}::uuid
+            where to_entity_id = ${lose}::uuid
+            returning id
+          `,
+          "relationships",
+          "to_entity_id",
+          "repointed",
+        );
 
-        const information = await sql`
-          update intel.information set entity_id = ${keep}::uuid
-          where entity_id = ${lose}::uuid
-        `;
+        const information = note(
+          await sql<{ id: string }[]>`
+            update intel.information set entity_id = ${keep}::uuid
+            where entity_id = ${lose}::uuid
+            returning id
+          `,
+          "information",
+          "entity_id",
+          "repointed",
+        );
 
-        const findingLinks = await sql`
-          update intel.finding_links set entity_id = ${keep}::uuid
-          where entity_id = ${lose}::uuid
-            and finding_id not in (
-              select finding_id from intel.finding_links
-              where entity_id = ${keep}::uuid
-            )
-        `;
-        await sql`
-          delete from intel.finding_links where entity_id = ${lose}::uuid
-        `;
+        // All of them, with no deletion. finding_links has no unique
+        // constraint, so nothing ever required the conditional move and the
+        // delete that followed it. Two links from one finding are untidy at
+        // worst and a reader can unlink one by hand, which is what that
+        // table's DELETE grant is actually for.
+        const findingLinks = note(
+          await sql<{ id: string }[]>`
+            update intel.finding_links set entity_id = ${keep}::uuid
+            where entity_id = ${lose}::uuid
+            returning id
+          `,
+          "finding_links",
+          "entity_id",
+          "repointed",
+        );
 
         await sql`
           update intel.entities set
@@ -1524,12 +1638,12 @@ export function createResolutionRepository(
         `;
 
         const moved = {
-          aliases: aliases.count,
-          caseSubjects: subjects.count,
-          relationshipsFrom: relationshipsFrom.count,
-          relationshipsTo: relationshipsTo.count,
-          information: information.count,
-          findingLinks: findingLinks.count,
+          aliases,
+          caseSubjects: subjects,
+          relationshipsFrom,
+          relationshipsTo,
+          information,
+          findingLinks,
           nameAsAlias: nameAlias.count > 0 ? loser.name : undefined,
         };
 
@@ -1542,6 +1656,24 @@ export function createResolutionRepository(
           )
           returning id
         `;
+
+        // The part that makes the merge reversible, written in the same
+        // transaction as the merge itself, so a log that exists is a log that
+        // is complete.
+        if (touched.length > 0) {
+          await sql`
+            insert into intel.entity_merge_rows ${sql(
+              touched.map((row) => ({
+                merge_id: created.id,
+                table_name: row.table,
+                row_id: row.rowId,
+                column_name: row.column,
+                action: row.action,
+                previous_entity_id: row.action === "repointed" ? lose : null,
+              })),
+            )}
+          `;
+        }
 
         await sql`
           select audit.write(
@@ -1584,15 +1716,123 @@ export function createResolutionRepository(
           `;
         }
 
-        // Rows moved by this merge are the ones whose source note or audit
-        // trail points at it. Aliases carry that note; the rest are moved
-        // back by the merge record's counts being non-zero, which is why the
-        // counts are stored rather than recomputed.
+        /*
+         * Everything the merge moved, put back by identity.
+         *
+         * This used to match aliases on the breadcrumb in their source_note
+         * and leave the rest where they were, because the merge recorded only
+         * how many rows it had moved and not which. So a reversal restored
+         * the two records and their names while every statement, case link,
+         * relationship and finding link stayed on the survivor, and said it
+         * had succeeded. `information` is a hop in the chain this platform
+         * exists to keep intact, so that was an attribution quietly left
+         * wrong on exactly the records somebody had just decided were not the
+         * same thing.
+         *
+         * `intel.entity_merge_rows` now holds the identities (migration
+         * 0048). The table and column names come from that table's CHECK
+         * constraints and are matched against literals here, never
+         * interpolated as identifiers.
+         */
+        const moved = await sql<
+          { id: string; table_name: string; column_name: string; action: string; row_id: string }[]
+        >`
+          select id, table_name, column_name, action, row_id
+          from intel.entity_merge_rows
+          where merge_id = ${input.mergeId}::uuid and restored_at is null
+        `;
+
+        const ids = (table: string, column: string, action: string) =>
+          moved
+            .filter(
+              (row) =>
+                row.table_name === table &&
+                row.column_name === column &&
+                row.action === action,
+            )
+            .map((row) => row.row_id);
+
+        const aliasIds = ids("entity_aliases", "entity_id", "repointed");
+        if (aliasIds.length > 0) {
+          await sql`
+            update intel.entity_aliases set entity_id = ${lose}::uuid
+            where id = any(${aliasIds}::uuid[])
+          `;
+        }
+
+        const subjectIds = ids("case_subjects", "entity_id", "repointed");
+        if (subjectIds.length > 0) {
+          await sql`
+            update intel.case_subjects set
+              entity_id = ${lose}::uuid, updated_by = ${actor.userId}::uuid
+            where id = any(${subjectIds}::uuid[])
+          `;
+        }
+
+        // The subject rows the merge withdrew because the survivor was
+        // already on that case. Their role and notes were kept, so restoring
+        // them is putting the removal back, not reconstructing a row.
+        const withdrawnSubjects = ids("case_subjects", "removed_at", "withdrawn");
+        if (withdrawnSubjects.length > 0) {
+          await sql`
+            update intel.case_subjects set
+              removed_at = null, removed_by = null, removal_reason = null,
+              updated_by = ${actor.userId}::uuid
+            where id = any(${withdrawnSubjects}::uuid[])
+          `;
+        }
+
+        for (const column of ["from_entity_id", "to_entity_id"] as const) {
+          const rows = ids("relationships", column, "repointed");
+          if (rows.length === 0) continue;
+          // Two statements rather than one with a dynamic column: the column
+          // is a literal in each, so nothing from the table reaches the SQL
+          // as an identifier.
+          if (column === "from_entity_id") {
+            await sql`
+              update intel.relationships set
+                from_entity_id = ${lose}::uuid, updated_by = ${actor.userId}::uuid
+              where id = any(${rows}::uuid[])
+            `;
+          } else {
+            await sql`
+              update intel.relationships set
+                to_entity_id = ${lose}::uuid, updated_by = ${actor.userId}::uuid
+              where id = any(${rows}::uuid[])
+            `;
+          }
+        }
+
+        const loops = ids("relationships", "deleted_at", "withdrawn");
+        if (loops.length > 0) {
+          await sql`
+            update intel.relationships set
+              deleted_at = null, updated_by = ${actor.userId}::uuid
+            where id = any(${loops}::uuid[])
+          `;
+        }
+
+        const informationIds = ids("information", "entity_id", "repointed");
+        if (informationIds.length > 0) {
+          await sql`
+            update intel.information set
+              entity_id = ${lose}::uuid, updated_by = ${actor.userId}::uuid
+            where id = any(${informationIds}::uuid[])
+          `;
+        }
+
+        const linkIds = ids("finding_links", "entity_id", "repointed");
+        if (linkIds.length > 0) {
+          await sql`
+            update intel.finding_links set entity_id = ${lose}::uuid
+            where id = any(${linkIds}::uuid[])
+          `;
+        }
+
+        // Marked, not deleted: what a reversal put back is itself history.
         await sql`
-          update intel.entity_aliases set entity_id = ${lose}::uuid
-          where entity_id = ${keep}::uuid
-            and source_note like ${`from ${merge.mergedEntityReference},%`}
-            and alias_type <> 'former_name'
+          update intel.entity_merge_rows set restored_at = now()
+          where merge_id = ${input.mergeId}::uuid and restored_at is null
         `;
 
         await sql`

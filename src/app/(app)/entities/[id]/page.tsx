@@ -330,6 +330,18 @@ export default async function EntityPage({
                       }`}
                     >
                       <MatchFlagList entityId={entity.id} flags={[flag]} />
+                      {/*
+                        `edit`, not `merge`. Deciding a flag writes to the
+                        entity register, which is what `entities:edit`
+                        governs, and the investigator who raised the flag can
+                        decide it. Merging is an elevation on top of that, not
+                        an alternative to it: it rewrites aliases, case
+                        subjects, relationships, information and finding
+                        links, every one of which requires edit at the policy
+                        level, so `merge` without `edit` cannot complete a
+                        merge and must never be read as sufficient here.
+                        Migration 0046 enforces that merge implies edit.
+                      */}
                       {detail.can.edit && (
                         <MatchDecisionForm
                           entity={entity}
