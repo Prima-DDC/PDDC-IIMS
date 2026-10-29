@@ -213,6 +213,27 @@ export function ActionForm({
           ),
         )}
 
+      {/*
+        `data-action-outcome` marks that this form has reported back, either
+        way. It carries no styling and says nothing a reader can see; it
+        exists so that "the action has finished" is a state something can
+        wait for rather than a moment that has to be guessed at.
+
+        That guessing was worth removing. Waiting for the submit button to
+        come back enabled looks equivalent and is not: the callback runs
+        before React has marked the form pending, so it sees an enabled
+        button and a settled page and returns before the action has even
+        started. Waiting for the button to disappear is worse again, because
+        a refreshing panel is briefly blank. Both are absences; this is a
+        presence, and only a completed action can produce it.
+      */}
+      {state.error && (
+        <span data-action-outcome="error" hidden aria-hidden="true" />
+      )}
+      {state.success && (
+        <span data-action-outcome="success" hidden aria-hidden="true" />
+      )}
+
       {!compact && state.error && <Alert tone="danger">{state.error}</Alert>}
       {!compact && state.success && <Alert tone="ok">{state.success}</Alert>}
 

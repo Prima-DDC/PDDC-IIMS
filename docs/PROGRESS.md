@@ -28,7 +28,7 @@ node --env-file=.env.local scripts/check-coexistence.mjs     # website untouched
 | M3 | Casework core (end of PRD Phase 1A) | Done, verified |
 | M4 | Documents, evidence and chain of custody | Done, verified |
 | M5 | Intelligence: entities, sources, information, findings | Done, verified |
-| M6 | Reporting, QA, closure, archive, management reports | Done, verified |
+| M6 | Reporting, QA, closure, archive, management reports | Done, verified end to end |
 | M7 | Notifications, dashboards, AI gateway | Not started |
 | M8 | Hardening and the PRD 20.1 acceptance demo | Not started |
 
@@ -730,8 +730,8 @@ rate and revenue against cost. Two points of care:
   once, that an approved version is locked, that a report with an uncited
   factual section cannot be submitted, and that closure is refused until every
   computed requirement actually holds.
-- **One end-to-end journey** with three people, because PRD 16 gives no single
-  person all of it and the journey would be worth little if it did: the
+- **One end-to-end journey, green**, with three people, because PRD 16 gives
+  no single person all of it and the journey would be worth little if it did: the
   operations manager opens the case and later closes it, the investigator
   writes the report, and the administrator reviews, runs QA, approves and
   delivers. It builds a real chain first, since a report citing nothing would
@@ -1635,6 +1635,95 @@ by inspecting the live platform rather than by reading documentation:
     every "it has gone" check can. Migration 0049's `Merged` badge is what
     made a positive wait available here, so the two fixes turned out to need
     each other.
+
+81. **PRD 5.9 closure could not be proposed at all, and the screen blamed the
+    wrong thing.** An unticked checkbox posts no key whatsoever, and
+    `contributeToKnowledgeBase` was declared as
+    `z.union([literal("on"), literal("true"), z.undefined()])`. That accepts
+    the *value* `undefined` while still requiring the *property* to exist, so
+    every submission failed validation unless the "contribute to the
+    knowledge base" box happened to be ticked. The clients feature already
+    had the correct shape, `.union([...]).optional()`, and reporting was the
+    only place that got it wrong.
+
+    What made it expensive was where the failure surfaced. The field has no
+    `Field` wrapper and so no error slot, so nothing was highlighted: the
+    form said "Check the highlighted fields" with every field correctly
+    filled. Meanwhile the closure gate's own notice, "6 requirements are not
+    met", sat on the same screen and looked exactly like the cause. It was
+    not. The gate was satisfied: zero open tasks, the report delivered with
+    an approved version, a delivery recorded, no evidence outstanding. Three
+    probes went into the gate before the schema was tested directly, which
+    took a minute and answered it outright.
+
+    The lesson is about where to look: the most prominent message on a page
+    is not necessarily the one the server returned. Parsing the exact
+    FormData the browser posts is the cheapest possible test and it was the
+    one that found this.
+
+    `src/features/reporting/schema.test.ts` now covers all three shapes a
+    browser can post a checkbox in, the empty lessons fields a rendered form
+    always sends, and the fields PRD 5.9 requires an answer to. Nothing had
+    tested these schemas before.
+
+82. **The author of a report under review was never told why they could not
+    pass it on.** The same defect as entry 74, in the reporting panel rather
+    than the findings one, and missed when 74 was fixed. The refusal was
+    gated on `offered.length === 0`, and an author can always withdraw their
+    own report, so the offer is never empty: they saw a status control
+    holding "withdrawn" alone with no indication that the review stages exist
+    and are deliberately somebody else's. Now stated whenever it is true,
+    with the withdraw control under it.
+
+83. **Three defects in the end-to-end journeys, all of one shape: waiting for
+    an absence.** Recorded because the first two repairs were themselves
+    wrong, in the same way as the thing they repaired.
+
+    Navigating straight after a submit renders the page before the action
+    commits, and nothing re-renders afterwards, so a stale page stands for
+    the whole assertion window. Waiting for the submit control to come back
+    enabled does not fix it: `toPass` runs its callback immediately, before
+    React has marked the form pending, so it sees an enabled button on a
+    settled page and returns before the action has started. Waiting for the
+    control to disappear is worse again, because `router.refresh()` shows a
+    panel's skeleton on the way and a blank satisfies it. The QA helper then
+    made a third version of the same error by asserting that a select held
+    the value it had itself just set, which is true in the browser the
+    instant `selectOption` returns and says nothing about what the server
+    did.
+
+    `ActionForm` now publishes `data-action-outcome` once it has a result,
+    success or failure. It carries no styling and says nothing a reader can
+    see; it exists so that "the action has finished" is a presence something
+    can wait for rather than a moment to be guessed at. `submitAndSettle`
+    waits for that, and accepts the confirmation dialog that several of these
+    actions put in front of themselves, because Playwright dismisses an
+    unhandled dialog and a dismissed confirm cancels the submit silently.
+
+    The rule, now written into the helper and the component: **wait for the
+    state the action produces, never for the absence of the state it
+    replaces.** A positive signal cannot be faked by a blank; every "it has
+    gone" check can.
+
+84. **And three more in the journeys that were simply wrong about the
+    product.** A stamp at module scope is shared by retries, so a retried run
+    searched a name space it shared with the attempt that had just failed and
+    could pick up its half-finished records, producing failures describing
+    pages the product could not be made to show again. A run marker placed at
+    the END of a description is invisible to a test that looks for it,
+    because the link and corroboration pickers label an option with the first
+    sixty characters: the intel journey documents this in a comment, and the
+    reporting journey broke the rule anyway. And `final_report` is not a kind
+    of report; "final" is a STATUS on PRD 10.1's line. Every enum value and
+    every text assertion in the reporting journey was then audited against
+    the source, and one invention of each kind was all there was.
+
+    Worth stating plainly, because it is the honest summary of this file's
+    cost: the reporting journey took nine runs to go green, and apart from
+    the three product bugs it found, every failure was a defect in the test
+    rather than in the code it exercises. The product bugs were worth it:
+    none of them was reachable from the integration tests, which call use
+    cases directly and never post a form.
 
 ---
 

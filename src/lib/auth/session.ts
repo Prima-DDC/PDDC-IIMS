@@ -171,6 +171,28 @@ export const getSession = cache(async (): Promise<SessionOutcome> => {
   const user = userData?.user ?? null;
 
   if (!user) {
+    /*
+     * Why the session was rejected, on one line, server side.
+     *
+     * Signing somebody out is the most disruptive thing this function can do:
+     * they lose their place, and because the proxy clears the cookie they
+     * have to give their password and their authenticator code again. Twice
+     * in this build a valid session was discarded and the only visible
+     * evidence was a sign-in page, which says nothing about the cause and
+     * sent the investigation to the wrong place both times.
+     *
+     * The status is the whole diagnosis: 401 or 403 is a genuinely dead
+     * token, 429 is a rate limit the retry above should already have
+     * absorbed, and no status at all is a transport failure. No token, no
+     * email and no identifiers are logged, because this line exists on a
+     * path that by definition has no trustworthy identity attached to it.
+     */
+    console.warn(
+      `[auth] session rejected: status=${userError?.status ?? "none"} code=${
+        (userError as { code?: string } | null)?.code ?? "none"
+      } ${userError?.message ?? "no error reported, so the cookie carried no session"}`,
+    );
+
     return {
       ok: false,
       reason: "not_authenticated",

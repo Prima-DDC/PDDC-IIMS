@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openApprovedCase } from "./case-fixture";
 import {
+  SECOND_ADMIN_STATE,
   caseTab,
   openForm,
   submitAndSettle,
@@ -32,13 +33,52 @@ import {
  * supervisor stage has defeated the same rule one step earlier.
  */
 
-const stamp = Date.now().toString().slice(-8);
-const CASE_TITLE = `E2E reporting journey ${stamp}`;
-const CLIENT = `E2E Reporting Client ${stamp}`;
-const COMPANY = `Meridian Logistics Ltd ${stamp}`;
-const FINDING = `Three payments totalling GHS 480,000 went to a company controlled by the claims officer, run ${stamp}`;
-const STATEMENT = `Bank statements show three transfers with no purchase order reference, run ${stamp}`;
-const REPORT_TITLE = `Corporate fraud investigation report ${stamp}`;
+const RUN = Date.now().toString().slice(-8);
+
+/**
+ * Every name this journey creates, from a stamp unique to the attempt.
+ *
+ * Two rules here, both learned the expensive way in the intel journey and
+ * both broken again when this file was written, which is why they are
+ * repeated rather than cross-referenced.
+ *
+ * The run marker goes FIRST in anything a picker will show. The link and
+ * corroboration pickers label an option with the first sixty characters of
+ * the description, so a marker at the end is invisible to a test looking for
+ * it: `STATEMENT` had it at the end, forty characters past the cut, and the
+ * finding-link step spent fifty seconds waiting for an option that could
+ * never say what it was waiting for.
+ *
+ * And the stamp is per attempt, not per module. A module-level stamp is
+ * computed once per worker, so a retry reuses it and searches a name space it
+ * shares with the attempt that just failed.
+ */
+function names(stamp: string) {
+  return {
+    CASE_TITLE: `E2E reporting journey ${stamp}`,
+    CLIENT: `E2E Reporting Client ${stamp}`,
+    COMPANY: `Meridian Logistics ${stamp} Ltd`,
+    FINDING: `Run ${stamp}: three payments totalling GHS 480,000 went to a company controlled by the claims officer.`,
+    STATEMENT: `Run ${stamp}: bank statements show three transfers with no purchase order reference.`,
+    REPORT_TITLE: `Corporate fraud investigation report ${stamp}`,
+  };
+}
+
+/**
+ * What `setReportStatus` actually says when a report reaches each stage.
+ *
+ * Asserted rather than paraphrased. An earlier version of this file waited
+ * for "moved to", which the platform never says, so a step that worked
+ * perfectly failed for ninety seconds on wording the test had invented.
+ */
+const ARRIVED: Record<string, RegExp> = {
+  investigator_review: /is with an investigator to read/i,
+  supervisor_review: /is with a supervisor/i,
+  qa_review: /is with QA/i,
+  approval: /is awaiting approval/i,
+  final: /is final, and .* is locked/i,
+  draft: /is back with its author/i,
+};
 
 /** The twelve checks of PRD 10.3, by key. */
 const CHECKLIST = [
@@ -62,26 +102,44 @@ async function answerChecklist(
   options: { fail?: string; comment?: string } = {},
 ) {
   const qa = panel(page, "QA review");
+
   for (const key of CHECKLIST) {
     const failing = key === options.fail;
-    await qa
+    const form = qa.locator("form", {
+      has: page.locator(`select#qa-${key}`),
+    });
+
+    await form
       .locator(`select#qa-${key}`)
       .selectOption(failing ? "fail" : "pass");
     if (failing) {
-      await qa
+      // PRD 10.3: a failed check without a reason is one the author cannot
+      // act on, and the server refuses it.
+      await form
         .locator(`#qa-comment-${key}`)
         .fill(
           options.comment ?? "This has to be corrected before it goes out.",
         );
     }
-    await qa
-      .locator("form", { has: page.locator(`select#qa-${key}`) })
-      .getByRole("button", { name: /^record$/i })
-      .click();
-    await expect(qa.locator(`select#qa-${key}`)).toHaveValue(
-      failing ? "fail" : "pass",
-    );
+
+    /*
+     * Each check is its own action, and each one has to have LANDED before
+     * the next is answered.
+     *
+     * The first version clicked Record and then asserted the select held the
+     * value it had just been set to, which is true in the browser the moment
+     * `selectOption` returns and says nothing about whether the server
+     * agreed. So twelve clicks went out, some number of them persisted, and
+     * the completion control never appeared: it is only rendered once all
+     * twelve are answered, so an unanswered check reads as "2 checks have
+     * not been answered" rather than as a failure, and the step waited
+     * ninety seconds for a button that was correctly absent.
+     */
+    await submitAndSettle(form.getByRole("button", { name: /^record$/i }));
   }
+
+  // All twelve, counted from the screen rather than assumed from the loop.
+  await expect(qa.getByText(/not been answered/i)).toHaveCount(0);
 }
 
 test.describe("a report from an accepted finding to a closed, archived case", () => {
@@ -93,7 +151,13 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
   test("drafted, reviewed, returned by QA, approved, delivered, closed", async ({
     page,
     browser,
-  }) => {
+  }, testInfo) => {
+    // Unique to the attempt, so a retry cannot find the previous attempt's
+    // records. See the note on `names`.
+    const stamp = testInfo.retry > 0 ? `${RUN}r${testInfo.retry}` : RUN;
+    const { CASE_TITLE, CLIENT, COMPANY, FINDING, STATEMENT, REPORT_TITLE } =
+      names(stamp);
+
     const caseUrl = await openApprovedCase({
       page,
       browser,
@@ -141,8 +205,11 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
       storageState: "playwright/.auth/investigator.json",
     });
     const author = await authorCtx.newPage();
+    // The administrator's SECOND session, because `openApprovedCase` is
+    // already using the first one to approve the engagement and two contexts
+    // must not share a refresh token. See the note in auth.setup.ts.
     const reviewerCtx = await browser.newContext({
-      storageState: "playwright/.auth/admin.json",
+      storageState: SECOND_ADMIN_STATE,
     });
     const reviewer = await reviewerCtx.newPage();
 
@@ -285,7 +352,15 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         const reports = panel(author, "Reports");
         await openForm(reports, /start a report/i);
         await reports.locator("#rpt-title").fill(REPORT_TITLE);
-        await reports.locator("select#rpt-type").selectOption("final_report");
+        // `investigation_report`, not the `final_report` this test first
+        // asked for: that value does not exist. PRD 10's vocabulary is
+        // investigation, interim, due diligence, intelligence brief,
+        // memorandum, closure summary and other. "Final" is a STATUS a
+        // report reaches on PRD 10.1's line, not a kind of report, and
+        // conflating the two is easy to do from the outside.
+        await reports
+          .locator("select#rpt-type")
+          .selectOption("investigation_report");
         await reports
           .getByRole("button", { name: /start the report/i })
           .click();
@@ -375,9 +450,12 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await settled(author);
 
         // PRD 10.1: "The author can never approve their own report." The
-        // screen says so rather than offering a control the server refuses.
+        // screen says so rather than leaving them to infer it from a status
+        // control that quietly offers only "withdraw".
         await expect(
-          panel(author, "Where it is").getByText(/your own report/i),
+          panel(author, "Where it is").getByText(
+            /cannot be the one who passes it on/i,
+          ),
         ).toBeVisible();
       });
 
@@ -392,10 +470,10 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
           await where
             .locator("#rpt-notes")
             .fill("Read in full; the citations check out.");
-          await where
-            .getByRole("button", { name: /record the decision/i })
-            .click();
-          await expect(where.getByText(/moved to/i).first()).toBeVisible();
+          await submitAndSettle(
+            where.getByRole("button", { name: /record the decision/i }),
+          );
+          await expect(where.getByText(ARRIVED[target]).first()).toBeVisible();
         }
       });
 
@@ -457,7 +535,12 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await where
           .locator("select#rpt-status")
           .selectOption("investigator_review");
-        await where.getByRole("button", { name: /put it forward/i }).click();
+        await submitAndSettle(
+          where.getByRole("button", { name: /put it forward/i }),
+        );
+        await expect(
+          where.getByText(ARRIVED.investigator_review).first(),
+        ).toBeVisible();
 
         for (const target of ["supervisor_review", "qa_review"] as const) {
           await reviewer.goto(reportUrl);
@@ -465,9 +548,10 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
           const stage = panel(reviewer, "Where it is");
           await stage.locator("select#rpt-status").selectOption(target);
           await stage.locator("#rpt-notes").fill("The names now agree.");
-          await stage
-            .getByRole("button", { name: /record the decision/i })
-            .click();
+          await submitAndSettle(
+            stage.getByRole("button", { name: /record the decision/i }),
+          );
+          await expect(stage.getByText(ARRIVED[target]).first()).toBeVisible();
         }
 
         await reviewer.goto(reportUrl);
@@ -498,6 +582,7 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
           await submitAndSettle(
             where.getByRole("button", { name: /record the decision/i }),
           );
+          await expect(where.getByText(ARRIVED[target]).first()).toBeVisible();
           await reviewer.goto(reportUrl);
           await settled(reviewer);
         }
@@ -511,16 +596,19 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await delivery
           .locator("#del-notes")
           .fill("Signed link, expires in seven days.");
-        await delivery
-          .getByRole("button", { name: /record the delivery/i })
-          .click();
+        await submitAndSettle(
+          delivery.getByRole("button", { name: /record the delivery/i }),
+        );
         await expect(
           delivery.getByText(/Claims Director/i).first(),
         ).toBeVisible();
       });
     } finally {
+      // The reviewer's page stays open deliberately: the closure approval
+      // below needs an administrator, and re-seeding a second context from
+      // the same saved session would present a refresh token the first one
+      // has already consumed. One session, one context, for the whole test.
       await author.close().catch(() => {});
-      await reviewer.close().catch(() => {});
     }
 
     /* ------------------------------------------- closure and the archive */
@@ -535,7 +623,13 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
       // report existed would look like assurance and be the opposite.
       const gate = panel(page, "What closure requires");
       await expect(gate.locator("li")).toHaveCount(9);
-      await expect(gate.getByText(/read from the records/i)).toHaveCount(3);
+      // Counted inside the list, because the card's own description also
+      // contains the phrase: it explains that "the three marked as read from
+      // the records cannot be attested to". Counting across the whole panel
+      // found four and read like a product bug.
+      await expect(
+        gate.locator("li").getByText(/read from the records/i),
+      ).toHaveCount(3);
     });
 
     await test.step("propose closure with lessons learned", async () => {
@@ -582,30 +676,24 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
     });
 
     await test.step("a second person approves it, and the case is archived", async () => {
-      const adminCtx = await browser.newContext({
-        storageState: "playwright/.auth/admin.json",
-      });
-      const second = await adminCtx.newPage();
-      try {
-        await second.goto(caseTab(caseUrl, "closure"));
-        await settled(second);
+      // The administrator who has been reviewing all along, on the session
+      // they already hold. PRD 5.9 only requires that it not be the person
+      // who proposed the closure, which was the manager.
+      await reviewer.goto(caseTab(caseUrl, "closure"));
+      await settled(reviewer);
 
-        const decision = panel(second, "The proposed closure");
-        await decision.locator("select#cl-decision").selectOption("approved");
-        await decision
-          .locator("#cl-notes")
-          .fill("Objectives met, evidence accounted for, nothing outstanding.");
-        await submitAndSettle(
-          decision.getByRole("button", { name: /record the decision/i }),
-        );
+      const decision = panel(reviewer, "The proposed closure");
+      await decision.locator("select#cl-decision").selectOption("approved");
+      await decision
+        .locator("#cl-notes")
+        .fill("Objectives met, evidence accounted for, nothing outstanding.");
+      await submitAndSettle(
+        decision.getByRole("button", { name: /record the decision/i }),
+      );
 
-        await second.goto(caseTab(caseUrl, "closure"));
-        await settled(second);
-        await expect(second.getByText(/closed and archived/i)).toBeVisible();
-      } finally {
-        await second.close().catch(() => {});
-        await adminCtx.close().catch(() => {});
-      }
+      await reviewer.goto(caseTab(caseUrl, "closure"));
+      await settled(reviewer);
+      await expect(reviewer.getByText(/closed and archived/i)).toBeVisible();
     });
 
     await test.step("the archive finds it, and it is the same record", async () => {
@@ -648,17 +736,14 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
     });
 
     await test.step("an investigator is refused the firm's figures", async () => {
-      const ctx = await browser.newContext({
-        storageState: "playwright/.auth/investigator.json",
-      });
-      const them = await ctx.newPage();
-      try {
-        const response = await them.request.get("/api/export/management");
-        expect(response.status()).toBe(403);
-      } finally {
-        await them.close().catch(() => {});
-        await ctx.close().catch(() => {});
-      }
+      // On the author's own context, which is still the investigator's
+      // session: a second context seeded from the same saved session would
+      // present a refresh token the first has already spent.
+      const response = await authorCtx.request.get("/api/export/management");
+      expect(response.status()).toBe(403);
     });
+
+    await reviewerCtx.close().catch(() => {});
+    await authorCtx.close().catch(() => {});
   });
 });

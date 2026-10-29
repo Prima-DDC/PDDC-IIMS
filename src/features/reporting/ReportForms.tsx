@@ -225,8 +225,8 @@ export function VersionForm({
   if (version.isApproved) {
     return (
       <Alert tone="info">
-        {version.versionLabel} is approved and locked. A change from here is
-        the next version, with a reason, approved again (PRD 10.2).
+        {version.versionLabel} is approved and locked. A change from here is the
+        next version, with a reason, approved again (PRD 10.2).
       </Alert>
     );
   }
@@ -247,7 +247,12 @@ export function VersionForm({
         <div className="space-y-3">
           {(
             [
-              ["executiveSummary", "Executive summary", version.executiveSummary, 3],
+              [
+                "executiveSummary",
+                "Executive summary",
+                version.executiveSummary,
+                3,
+              ],
               ["scopeStatement", "Scope", version.scopeStatement, 2],
               ["methodology", "Methodology", version.methodology, 2],
               ["limitations", "Limitations", version.limitations, 2],
@@ -582,9 +587,7 @@ export function SectionControls({
                     name="citationType"
                     defaultValue={kinds[0]}
                     onChange={(event) =>
-                      setCitationType(
-                        event.target.value as typeof citationType,
-                      )
+                      setCitationType(event.target.value as typeof citationType)
                     }
                   >
                     {kinds.map((type) => (
@@ -668,15 +671,29 @@ export function ReportStatusForm({
 
   const [target, setTarget] = useState(offered[0] ?? "");
 
+  /*
+   * Said whenever it is true, not only when there is nothing else to offer.
+   *
+   * The author of a report under review can still withdraw it, so `offered`
+   * is never empty and this used to go unsaid: they saw a status control
+   * holding "withdrawn" alone, with no indication that the review stages
+   * exist and are deliberately somebody else's. "The screen says why rather
+   * than offering a form the server would refuse" is the rule everywhere
+   * else here, and a control quietly missing its main options is the same
+   * failure in a quieter form. The findings panel had the identical bug.
+   */
+  const ownUnderReview = isOwnReport && report.status !== "draft";
+  const whoDecides = ownUnderReview ? (
+    <Alert tone="info">
+      You wrote this report, so you cannot be the one who passes it on. Somebody
+      other than its author has to, which is the only thing that makes the
+      review worth having (PRD 10.1).
+    </Alert>
+  ) : null;
+
   if (offered.length === 0) {
-    if (isOwnReport && report.status !== "draft") {
-      return (
-        <Alert tone="info">
-          You wrote this report, so you cannot be the one who passes it on.
-          Somebody other than its author has to, which is the only thing that
-          makes the review worth having (PRD 10.1).
-        </Alert>
-      );
+    if (ownUnderReview) {
+      return whoDecides;
     }
     if (report.status === "delivered") {
       return (
@@ -692,59 +709,62 @@ export function ReportStatusForm({
   const deciding = target !== "investigator_review" && target !== "withdrawn";
 
   return (
-    <ActionForm
-      action={setReportStatus}
-      submitLabel={
-        <>
-          <Send className="size-4" aria-hidden="true" />
-          {deciding ? "Record the decision" : "Put it forward"}
-        </>
-      }
-      submitSize="sm"
-      hidden={{ caseRecordId, reportRecordId: report.id }}
-    >
-      {(state) => (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field
-            label="Move it to"
-            htmlFor="rpt-status"
-            required
-            error={state.fieldErrors?.status}
-          >
-            <Select
-              id="rpt-status"
-              name="status"
-              defaultValue={offered[0]}
-              onChange={(event) =>
-                setTarget(event.target.value as typeof target)
-              }
-            >
-              {offered.map((status) => (
-                <option key={status} value={status}>
-                  {REPORT_STATUS_LABELS[status]}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          <div className="sm:col-span-2">
+    <div className="space-y-3">
+      {whoDecides}
+      <ActionForm
+        action={setReportStatus}
+        submitLabel={
+          <>
+            <Send className="size-4" aria-hidden="true" />
+            {deciding ? "Record the decision" : "Put it forward"}
+          </>
+        }
+        submitSize="sm"
+        hidden={{ caseRecordId, reportRecordId: report.id }}
+      >
+        {(state) => (
+          <div className="grid gap-3 sm:grid-cols-2">
             <Field
-              label="Your note"
-              htmlFor="rpt-notes"
-              required={target === "draft"}
-              hint={
-                target === "draft"
-                  ? "Say what needs doing. A report returned with no note is one nobody can act on."
-                  : "Recorded against this stage, and read by whoever looks at the history."
-              }
-              error={state.fieldErrors?.notes}
+              label="Move it to"
+              htmlFor="rpt-status"
+              required
+              error={state.fieldErrors?.status}
             >
-              <Textarea id="rpt-notes" name="notes" rows={2} />
+              <Select
+                id="rpt-status"
+                name="status"
+                defaultValue={offered[0]}
+                onChange={(event) =>
+                  setTarget(event.target.value as typeof target)
+                }
+              >
+                {offered.map((status) => (
+                  <option key={status} value={status}>
+                    {REPORT_STATUS_LABELS[status]}
+                  </option>
+                ))}
+              </Select>
             </Field>
+
+            <div className="sm:col-span-2">
+              <Field
+                label="Your note"
+                htmlFor="rpt-notes"
+                required={target === "draft"}
+                hint={
+                  target === "draft"
+                    ? "Say what needs doing. A report returned with no note is one nobody can act on."
+                    : "Recorded against this stage, and read by whoever looks at the history."
+                }
+                error={state.fieldErrors?.notes}
+              >
+                <Textarea id="rpt-notes" name="notes" rows={2} />
+              </Field>
+            </div>
           </div>
-        </div>
-      )}
-    </ActionForm>
+        )}
+      </ActionForm>
+    </div>
   );
 }
 
@@ -859,8 +879,9 @@ export function CompleteQaForm({
   if (answered < total) {
     return (
       <Muted>
-        {total - answered} {total - answered === 1 ? "check has" : "checks have"}{" "}
-        not been answered. An unanswered check is one nobody looked at.
+        {total - answered}{" "}
+        {total - answered === 1 ? "check has" : "checks have"} not been
+        answered. An unanswered check is one nobody looked at.
       </Muted>
     );
   }
@@ -952,7 +973,11 @@ export function DeliveryForm({
             required
             error={state.fieldErrors?.deliveryMethod}
           >
-            <Select id="del-method" name="deliveryMethod" defaultValue="secure_link">
+            <Select
+              id="del-method"
+              name="deliveryMethod"
+              defaultValue="secure_link"
+            >
               {DELIVERY_METHODS.map((method) => (
                 <option key={method} value={method}>
                   {DELIVERY_METHOD_LABELS[method]}
@@ -1199,13 +1224,21 @@ export function ClosureForm({
                 ["whatDidNotWork", "What did not", closure?.whatDidNotWork],
                 ["challenges", "Challenges", closure?.challenges],
                 ["newSources", "New sources discovered", closure?.newSources],
-                ["newTypologies", "New fraud typologies", closure?.newTypologies],
+                [
+                  "newTypologies",
+                  "New fraud typologies",
+                  closure?.newTypologies,
+                ],
                 [
                   "methodologicalLessons",
                   "Methodological lessons",
                   closure?.methodologicalLessons,
                 ],
-                ["recommendations", "Recommendations", closure?.recommendations],
+                [
+                  "recommendations",
+                  "Recommendations",
+                  closure?.recommendations,
+                ],
               ] as Array<[string, string, string | null | undefined]>
             ).map(([name, label, value]) => (
               <Field
@@ -1416,8 +1449,8 @@ export function ClosureGateNotice({ items }: { items: ClosureGateItem[] }) {
       title={`${blocking.length} ${blocking.length === 1 ? "requirement is" : "requirements are"} not met`}
     >
       PRD 5.9 blocks closure until every one is. The list below says what each
-      needs, and the three marked &quot;read from the records&quot; are ones
-      the platform answers itself: they cannot be ticked, only done.
+      needs, and the three marked &quot;read from the records&quot; are ones the
+      platform answers itself: they cannot be ticked, only done.
     </Alert>
   );
 }

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { expect, type Locator, type Page } from "@playwright/test";
+import path from "node:path";
+import { expect, type Dialog, type Locator, type Page } from "@playwright/test";
 import { generateTotp } from "./totp";
 
 /**
@@ -19,12 +20,22 @@ import { generateTotp } from "./totp";
  */
 
 export type FixtureKey =
-  | "ADMIN"
-  | "INVESTIGATOR"
-  | "MANAGER"
-  | "SUSPENDED"
-  | "NOACCESS"
-  | "ENROL";
+  "ADMIN" | "INVESTIGATOR" | "MANAGER" | "SUSPENDED" | "NOACCESS" | "ENROL";
+
+export const AUTH_DIR = path.join("playwright", ".auth");
+
+export function statePath(key: FixtureKey): string {
+  return path.join(AUTH_DIR, `${key.toLowerCase()}.json`);
+}
+
+/**
+ * The administrator's second session. See the note below on why it exists.
+ *
+ * `admin.json` belongs to `openApprovedCase`, which needs an administrator to
+ * approve the engagement. A journey that also needs an administrator uses
+ * this one, so the two never share a refresh token.
+ */
+export const SECOND_ADMIN_STATE = path.join(AUTH_DIR, "admin-second.json");
 
 export interface Credentials {
   key: FixtureKey;
@@ -134,7 +145,9 @@ export async function signIn(page: Page, creds: Credentials): Promise<void> {
 
   // Which screen appears depends on whether a factor exists, and a previous
   // run may have enrolled one, so detect rather than assume.
-  const enrolButton = page.getByRole("button", { name: /start two-factor setup/i });
+  const enrolButton = page.getByRole("button", {
+    name: /start two-factor setup/i,
+  });
   const needsEnrolment = await enrolButton.isVisible().catch(() => false);
 
   if (needsEnrolment) {
@@ -173,9 +186,9 @@ export async function signIn(page: Page, creds: Credentials): Promise<void> {
  * scopes its assertions to one card cannot be satisfied by text from another.
  */
 export const panel = (page: Page, title: string) =>
-  page
-    .locator("section")
-    .filter({ has: page.getByRole("heading", { name: title, exact: true, level: 2 }) });
+  page.locator("section").filter({
+    has: page.getByRole("heading", { name: title, exact: true, level: 2 }),
+  });
 
 /**
  * Opens an "add" form inside a panel, if it is not already open.
@@ -201,44 +214,64 @@ export const panel = (page: Page, title: string) =>
  * without the form being open, and neither happens before hydration.
  */
 /**
- * Clicks a submit control and waits for its action to have finished.
+ * Clicks a submit control and waits for its action to have reported back.
  *
- * Navigating straight after clicking a submit is a race, and an expensive one
- * to diagnose. The server action is still in flight; a `goto` renders the
- * page again immediately, and because the action's transaction has not
- * committed yet the fresh HTML describes the state BEFORE the write. Nothing
- * re-renders after the commit, so the stale page sits there for the whole
- * assertion window. The write has genuinely happened and the database is
- * right, which is what makes it so confusing: the failure describes a page
- * that cannot be reproduced a minute later, and it reads like a product bug.
+ * Navigating straight after a submit is a race. The action is still in
+ * flight, a `goto` renders the page again immediately, and because the
+ * transaction has not committed the fresh HTML describes the state BEFORE
+ * the write. Nothing re-renders after the commit, so the stale page stands
+ * for the whole assertion window: the write has genuinely happened, the
+ * database is right, and the failure describes a page that cannot be
+ * reproduced a minute later.
  *
- * `ActionForm` disables its submit button while the action runs and shows
- * "Saving", so the button coming back is the signal that the write landed and
- * `router.refresh()` has rendered the result. Some forms are replaced
- * outright on success, so a control that has gone is equally a finished
- * action.
+ * Two plausible waits were tried here and both were wrong, in the same way.
+ * Waiting for the submit button to come back enabled runs before React has
+ * marked the form pending, so it sees an enabled button on a settled page
+ * and returns before the action has started: a wait that waits for nothing.
+ * Waiting for the control to disappear is worse, because `router.refresh()`
+ * shows a panel's skeleton on the way and a blank satisfies it.
  *
- * The `[data-loading]` check is not padding. `router.refresh()` replaces a
- * streamed panel with its skeleton on the way, so a control can be absent for
- * a moment while the new data is still in flight. Treating that absence as a
- * finished action puts the race straight back, which is a mistake worth
- * naming because it looks like the fix.
+ * Both are absences. `ActionForm` publishes `data-action-outcome` once it has
+ * a result, success or failure, which is a presence only a completed action
+ * can produce. The rule this file keeps relearning: wait for the state the
+ * action produces, never for the absence of the state it replaces.
  *
- * Better still, where there is one: wait for the state the action PRODUCES.
- * A positive signal cannot be faked by a blank, whereas any "it has gone"
- * check can. Most steps assert their success message, which is exactly that
- * and needs nothing from this helper.
+ * It deliberately does NOT assert success. A refusal is a finished action
+ * too, and several steps exist to prove the server refuses something; the
+ * caller asserts which outcome it wanted.
  */
 export async function submitAndSettle(button: Locator): Promise<void> {
-  await button.click();
-
+  const form = button.locator("xpath=ancestor::form[1]");
   const page = button.page();
 
-  await expect(async () => {
-    expect(await page.locator("[data-loading]").count()).toBe(0);
-    if ((await button.count()) === 0) return;
-    expect(await button.isDisabled()).toBe(false);
-  }).toPass({ timeout: 60_000 });
+  /*
+   * Accept the confirmation, if the form asks for one.
+   *
+   * Several of these actions are destructive or hard to undo, so `ActionForm`
+   * puts a `confirm` in front of them: returning a report to its author,
+   * approving a closure, removing a section. Playwright DISMISSES a dialog
+   * nobody handles, which cancels the submit silently, so the form sits there
+   * having done nothing and the wait below times out against a page that
+   * looks perfectly healthy.
+   *
+   * Accepting is the right default because clicking submit is the intent;
+   * a step that wants to assert what the dialog SAYS can register its own
+   * handler, which runs first and consumes the event. The listener is removed
+   * afterwards either way, so it can never swallow a later dialog.
+   */
+  const accept = (dialog: Dialog) => {
+    void dialog.accept();
+  };
+  page.on("dialog", accept);
+
+  try {
+    await button.click();
+    await expect(form.locator("[data-action-outcome]")).toHaveCount(1, {
+      timeout: 60_000,
+    });
+  } finally {
+    page.off("dialog", accept);
+  }
 }
 
 export async function openForm(scope: Locator, name: RegExp) {
@@ -273,7 +306,9 @@ export async function openForm(scope: Locator, name: RegExp) {
  * for the full timeout before telling anybody.
  */
 export function labelled(label: string): RegExp {
-  return new RegExp("^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[*]?$");
+  return new RegExp(
+    "^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[*]?$",
+  );
 }
 
 /** Fills a field by its label. */

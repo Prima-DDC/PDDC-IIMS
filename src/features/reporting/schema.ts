@@ -204,9 +204,24 @@ const closureFields = {
   newTypologies: optionalText(8000),
   methodologicalLessons: optionalText(8000),
   recommendations: optionalText(8000),
+  /*
+   * An unticked checkbox posts nothing at all, so the KEY has to be optional.
+   *
+   * `z.undefined()` inside the union does not do that: the union accepts the
+   * value `undefined`, but the object still requires the property to be
+   * present, so a form without the box ticked failed with "expected
+   * nonoptional, received undefined". Since this field has no Field wrapper
+   * and therefore no error slot, the whole form came back saying "Check the
+   * highlighted fields" with nothing highlighted, and closure could not be
+   * proposed at all unless the box happened to be ticked.
+   *
+   * `.optional()` on the union is what makes the property optional, and is
+   * the shape every other checkbox in this codebase already uses.
+   */
   contributeToKnowledgeBase: z
-    .union([z.literal("on"), z.literal("true"), z.undefined()])
-    .transform((value) => value !== undefined),
+    .union([z.literal("on"), z.literal("true"), z.literal("")])
+    .optional()
+    .transform((value) => value === "on" || value === "true"),
 };
 
 export const proposeClosureSchema = z.object({

@@ -1,6 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { openApprovedCase } from "./case-fixture";
-import { caseTab, openForm, panel, selectContaining, settled } from "./helpers";
+import {
+  SECOND_ADMIN_STATE,
+  caseTab,
+  openForm,
+  panel,
+  selectContaining,
+  settled,
+} from "./helpers";
 
 /**
  * Subjects, sources, information and findings, through the real screens.
@@ -72,15 +79,22 @@ test.describe("subjects, sources, information and findings, end to end", () => {
   // before it, and this one runs two people through a case in sequence.
   test.setTimeout(30 * 60 * 1000);
 
-  test("from a subject to an accepted, traceable finding", async (
-    { page, browser },
-    testInfo,
-  ) => {
+  test("from a subject to an accepted, traceable finding", async ({
+    page,
+    browser,
+  }, testInfo) => {
     // Unique to the attempt, so a retry cannot find the previous attempt's
     // records. See the note on `names`.
     const stamp = testInfo.retry > 0 ? `${RUN}r${testInfo.retry}` : RUN;
-    const { CLIENT, CASE_TITLE, COMPANY, DUPLICATE, STATEMENT, INTERVIEW, FINDING } =
-      names(stamp);
+    const {
+      CLIENT,
+      CASE_TITLE,
+      COMPANY,
+      DUPLICATE,
+      STATEMENT,
+      INTERVIEW,
+      FINDING,
+    } = names(stamp);
 
     const caseUrl = await openApprovedCase({
       page,
@@ -153,7 +167,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
         await subjects.locator("select#ent-type").selectOption("company");
         await subjects.locator("#ent-name").fill(COMPANY);
         await subjects.locator("#ent-reg").fill(`CS${stamp}`);
-        await subjects.locator("select#ent-role").selectOption("primary_subject");
+        await subjects
+          .locator("select#ent-role")
+          .selectOption("primary_subject");
         await subjects
           .locator("#ent-relation")
           .fill("Received the three payments under investigation");
@@ -205,7 +221,10 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       await test.step("flag the pair, and the investigator cannot merge it", async () => {
         const duplicates = panel(field, "Duplicates and matches");
         await openForm(duplicates, /flag a match/i);
-        await selectContaining(duplicates.locator("select#flag-other"), DUPLICATE);
+        await selectContaining(
+          duplicates.locator("select#flag-other"),
+          DUPLICATE,
+        );
         await duplicates
           .locator("select#flag-type")
           .selectOption("potential_duplicate");
@@ -240,13 +259,23 @@ test.describe("subjects, sources, information and findings, end to end", () => {
 
         const sources = panel(field, "Sources");
         await openForm(sources, /record a source/i);
-        await sources.locator("select#src-type").selectOption("financial_record");
+        await sources
+          .locator("select#src-type")
+          .selectOption("financial_record");
         await sources
           .locator("#src-description")
-          .fill(`Bank statements for account 1234567, from the client, run ${stamp}`);
-        await sources.locator("select#src-reliability").selectOption("reliable");
-        await sources.getByRole("button", { name: /record the source/i }).click();
-        await expect(sources.getByText(/SRC-\d{4}-\d{6} recorded/i)).toBeVisible();
+          .fill(
+            `Bank statements for account 1234567, from the client, run ${stamp}`,
+          );
+        await sources
+          .locator("select#src-reliability")
+          .selectOption("reliable");
+        await sources
+          .getByRole("button", { name: /record the source/i })
+          .click();
+        await expect(
+          sources.getByText(/SRC-\d{4}-\d{6} recorded/i),
+        ).toBeVisible();
 
         // A human source. The platform decides that its identity is
         // need-to-know whatever is typed, and deliberately does NOT raise the
@@ -258,7 +287,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
         await again
           .locator("#src-description")
           .fill(`A former employee of the finance department, run ${stamp}`);
-        await again.locator("select#src-reliability").selectOption("usually_reliable");
+        await again
+          .locator("select#src-reliability")
+          .selectOption("usually_reliable");
         await again.getByRole("button", { name: /record the source/i }).click();
 
         await expect(
@@ -290,8 +321,12 @@ test.describe("subjects, sources, information and findings, end to end", () => {
           "Bank statements",
         );
         await information.locator("#inf-description").fill(STATEMENT);
-        await information.locator("select#inf-credibility").selectOption("probable");
-        await information.locator("select#inf-confidence").selectOption("moderate");
+        await information
+          .locator("select#inf-credibility")
+          .selectOption("probable");
+        await information
+          .locator("select#inf-confidence")
+          .selectOption("moderate");
         await information
           .getByRole("button", { name: /record the information/i })
           .click();
@@ -307,7 +342,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
         await second.locator("#inf-description").fill(INTERVIEW);
         await second.locator("select#inf-credibility").selectOption("possible");
         await second.locator("select#inf-confidence").selectOption("low");
-        await second.getByRole("button", { name: /record the information/i }).click();
+        await second
+          .getByRole("button", { name: /record the information/i })
+          .click();
         await expect(
           second.getByText(/INF-\d{4}-\d{6} recorded against SRC-/i),
         ).toBeVisible();
@@ -333,7 +370,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
         await field.waitForURL(/\/information\/[0-9a-f-]{36}/);
         informationUrl = field.url();
 
-        await expect(field.getByText(/Nothing bears this out yet/i)).toBeVisible();
+        await expect(
+          field.getByText(/Nothing bears this out yet/i),
+        ).toBeVisible();
       });
 
       await test.step("corroboration comes from a different source, and nothing else is offered", async () => {
@@ -351,7 +390,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
         await bears
           .locator("#corr-note")
           .fill("The interview bears out what the statements show");
-        await bears.getByRole("button", { name: /record the corroboration/i }).click();
+        await bears
+          .getByRole("button", { name: /record the corroboration/i })
+          .click();
         await expect(
           bears.getByText(/now corroborates this, from SRC-/i),
         ).toBeVisible();
@@ -366,8 +407,12 @@ test.describe("subjects, sources, information and findings, end to end", () => {
         await findings.locator("#fnd-statement").fill(FINDING);
         await findings
           .locator("#fnd-detail")
-          .fill("The statements show the payments and the interview explains how.");
-        await findings.getByRole("button", { name: /draft the finding/i }).click();
+          .fill(
+            "The statements show the payments and the interview explains how.",
+          );
+        await findings
+          .getByRole("button", { name: /draft the finding/i })
+          .click();
         await expect(findings.getByText(/F-\d{3} drafted/i)).toBeVisible();
 
         await field.goto(caseTab(caseUrl, "findings"));
@@ -452,8 +497,12 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       await stands.locator("select#fnd-status").selectOption("returned");
       await stands
         .locator("#fnd-review-notes")
-        .fill("Name the account the payments went to, and cite the statement page.");
-      await stands.getByRole("button", { name: /record the decision/i }).click();
+        .fill(
+          "Name the account the payments went to, and cite the statement page.",
+        );
+      await stands
+        .getByRole("button", { name: /record the decision/i })
+        .click();
       await expect(stands.getByText(/returned to its analyst/i)).toBeVisible();
     });
 
@@ -464,7 +513,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
         await settled(again);
         // The reviewer's note is on the screen the analyst comes back to,
         // which is the point of requiring one.
-        await expect(again.getByText(/Name the account the payments/i)).toBeVisible();
+        await expect(
+          again.getByText(/Name the account the payments/i),
+        ).toBeVisible();
 
         const stands = panel(again, "Where it stands");
         await stands.locator("select#fnd-status").selectOption("submitted");
@@ -481,7 +532,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       await accept
         .locator("#fnd-review-notes")
         .fill("Supported by the statements and the interview. Agreed.");
-      await accept.getByRole("button", { name: /record the decision/i }).click();
+      await accept
+        .getByRole("button", { name: /record the decision/i })
+        .click();
       await expect(
         accept.getByText(/accepted\. It can now be cited in a report/i),
       ).toBeVisible();
@@ -505,7 +558,7 @@ test.describe("subjects, sources, information and findings, end to end", () => {
      * for PRD 8.4's "authorised confirmation".
      */
     const adminCtx = await browser.newContext({
-      storageState: "playwright/.auth/admin.json",
+      storageState: SECOND_ADMIN_STATE,
     });
     const admin = await adminCtx.newPage();
 
@@ -522,9 +575,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
 
       const theirs = panel(page, "Duplicates and matches");
       await expect(theirs.getByText(/Awaiting a decision/i)).toBeVisible();
-      await expect(
-        theirs.locator("select[id^='match-decision-']"),
-      ).toHaveCount(0);
+      await expect(theirs.locator("select[id^='match-decision-']")).toHaveCount(
+        0,
+      );
       await expect(
         theirs.getByRole("button", { name: /^Merge ENT-/i }),
       ).toHaveCount(0);
@@ -613,13 +666,17 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       await expect(history.getByText(/In force/i)).toBeVisible();
       // The log says what was moved, which is what makes a reversal possible
       // rather than a guess.
-      await expect(history.getByText(/Nothing was deleted/i).first()).toBeVisible();
+      await expect(
+        history.getByText(/Nothing was deleted/i).first(),
+      ).toBeVisible();
 
       await history
         .locator("input[id^='reverse-']")
         .fill("The registration numbers differ after all; two companies.");
       admin.once("dialog", (dialog) => dialog.accept());
-      await history.getByRole("button", { name: /reverse this merge/i }).click();
+      await history
+        .getByRole("button", { name: /reverse this merge/i })
+        .click();
       await expect(
         history.getByText(/stands on its own again, marked disputed/i),
       ).toBeVisible();
@@ -627,7 +684,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       await admin.goto(entityUrl);
       await settled(admin);
       await expect(
-        panel(admin, "Merge history").getByText(/Reversed/i).first(),
+        panel(admin, "Merge history")
+          .getByText(/Reversed/i)
+          .first(),
       ).toBeVisible();
       // The decision that authorised it is reopened rather than left
       // standing, so somebody has to make it again.
@@ -650,7 +709,9 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       await page.goto(informationUrl);
       await settled(page);
       // Corroborated now, so the warning has gone.
-      await expect(page.getByText(/Nothing bears this out yet/i)).toHaveCount(0);
+      await expect(page.getByText(/Nothing bears this out yet/i)).toHaveCount(
+        0,
+      );
     });
 
     await admin.close().catch(() => {});
