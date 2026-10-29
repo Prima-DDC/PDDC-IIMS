@@ -20,7 +20,8 @@
     "test:integration": "node --env-file-if-exists=.env.local ./node_modules/vitest/dist/cli.js run tests/integration",
     "test:unit": "node ./node_modules/vitest/dist/cli.js run src",
     "seed:e2e": "tsx --env-file=.env.local scripts/seed-e2e-users.ts",
-    "grant-access": "tsx --env-file=.env.local scripts/grant-iims-access.ts"
+    "grant-access": "tsx --env-file=.env.local scripts/grant-iims-access.ts",
+    "clean:e2e": "tsx --env-file=.env.local scripts/clean-e2e-residue.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

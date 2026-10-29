@@ -257,11 +257,17 @@ test.describe("the case journey, end to end", () => {
       // recording the original scope is the last thing there is to do to it,
       // so the form goes when it succeeds. What replaces it is the scope
       // itself, with its version and who recorded it, which is the record.
-      await expect(scope.getByText(/Version 1 recorded/i)).toBeVisible();
+      // "Version 1" is a badge and "recorded <date>" is the line under it;
+      // the two are separate elements, so there is no "Version 1 recorded"
+      // to find. The success message says "Scope recorded as version 1",
+      // which is a third wording again. Asserted here as the screen renders
+      // it rather than as a sentence nothing says.
+      await expect(scope.getByText(/^Version 1$/)).toBeVisible();
+      await expect(scope.getByText(/^recorded /)).toBeVisible();
 
       await page.goto(caseUrl);
       const after = panel(page, "Scope");
-      await expect(after.getByText("Version 1 recorded")).toBeVisible();
+      await expect(after.getByText(/^Version 1$/)).toBeVisible();
       // There is no edit control anywhere in the panel, by design.
       await expect(after.locator("#scope")).toHaveCount(0);
       await expect(
