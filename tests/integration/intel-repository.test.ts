@@ -535,6 +535,12 @@ suite("entity resolution", () => {
       const subjectsOnCase = await subjects.forCase(record.id);
       expect(subjectsOnCase.map((s) => s.entityId)).toEqual([keep.id]);
 
+      // The flag records that its decision was carried out. Left at
+      // `same_entity` it read as a merge still waiting to happen, and the
+      // screen went on offering one that assertMergeable could only refuse.
+      const afterMerge = await resolution.flags({ entityId: keep.id });
+      expect(afterMerge[0].status).toBe("merged");
+
       /* ------------------------------------------------- and reversed */
 
       const reversed = await resolution.reverse({

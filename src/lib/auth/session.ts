@@ -43,10 +43,22 @@ import {
  * status at all, and a 5xx is the service itself being unwell; neither says
  * anything about whether the caller is signed in, so neither may be read as
  * "not signed in".
+ *
+ * 429 and 408 are the exceptions to the 4xx rule, and 429 is not a hypothesis.
+ * `getUser` refreshes an expired access token on the way through, Supabase
+ * rate-limits token refreshes, and this project's auth limits are shared with
+ * the live primaddc.com website, so a burst from either app can produce one.
+ * "Too many requests" means ask again shortly; reading it as "not signed in"
+ * signs out a session that was perfectly valid, and because the cookie is then
+ * cleared the person has to type their password and their authenticator code
+ * again for nothing. It presented as a test fixture mysteriously landing on
+ * the sign-in page one minute after a successful sign-in, with sessions that
+ * were provably still good when tried by hand a moment later.
  */
 function isRetryableAuthFailure(error: { status?: number } | null): boolean {
   if (!error) return false;
-  return error.status === undefined || error.status >= 500;
+  if (error.status === undefined) return true;
+  return error.status === 429 || error.status === 408 || error.status >= 500;
 }
 
 export interface Actor {
@@ -137,6 +149,13 @@ export const getSession = cache(async (): Promise<SessionOutcome> => {
   let { data: userData, error: userError } = await supabase.auth.getUser();
 
   if (isRetryableAuthFailure(userError)) {
+    // A pause before retrying, because an immediate second call gets the same
+    // answer from a rate limiter and usually from an overloaded service too.
+    // 300ms is short enough that a person does not notice it on the one
+    // request in many thousands that needs it, and long enough to be past a
+    // burst. Only one retry: if the service is genuinely down, the honest
+    // thing is to say so quickly rather than hold the request open.
+    await new Promise((resolve) => setTimeout(resolve, 300));
     ({ data: userData, error: userError } = await supabase.auth.getUser());
   }
 

@@ -1675,6 +1675,24 @@ export function createResolutionRepository(
           `;
         }
 
+        /*
+         * The flag records that its decision was carried out.
+         *
+         * Without this it stayed `same_entity` for ever, so the screen went
+         * on offering "Merge ENT-NNNN into this record" for a pair it had
+         * already merged, and `assertMergeable` could only refuse it. The
+         * reversal already assumed this state existed: it moves the flag to
+         * `undecided` so the decision has to be made again, which is the
+         * undoing of a closure that never happened. See migration 0049.
+         */
+        const [a, b] = orderedPair(keep, lose);
+        await sql`
+          update intel.entity_match_flags set
+            status = 'merged', updated_by = ${actor.userId}::uuid
+          where entity_a_id = ${a}::uuid and entity_b_id = ${b}::uuid
+            and status = 'same_entity'
+        `;
+
         await sql`
           select audit.write(
             'entity.merged', 'intel.entities', ${lose}, null, null,

@@ -3,6 +3,7 @@ import { openApprovedCase } from "./case-fixture";
 import {
   caseTab,
   openForm,
+  submitAndSettle,
   panel,
   selectContaining,
   settled,
@@ -63,11 +64,15 @@ async function answerChecklist(
   const qa = panel(page, "QA review");
   for (const key of CHECKLIST) {
     const failing = key === options.fail;
-    await qa.locator(`select#qa-${key}`).selectOption(failing ? "fail" : "pass");
+    await qa
+      .locator(`select#qa-${key}`)
+      .selectOption(failing ? "fail" : "pass");
     if (failing) {
       await qa
         .locator(`#qa-comment-${key}`)
-        .fill(options.comment ?? "This has to be corrected before it goes out.");
+        .fill(
+          options.comment ?? "This has to be corrected before it goes out.",
+        );
     }
     await qa
       .locator("form", { has: page.locator(`select#qa-${key}`) })
@@ -182,8 +187,12 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await sources
           .locator("select#src-reliability")
           .selectOption("reliable");
-        await sources.getByRole("button", { name: /record the source/i }).click();
-        await expect(sources.getByText(/SRC-\d{4}-\d{6} recorded/i)).toBeVisible();
+        await sources
+          .getByRole("button", { name: /record the source/i })
+          .click();
+        await expect(
+          sources.getByText(/SRC-\d{4}-\d{6} recorded/i),
+        ).toBeVisible();
 
         await author.goto(caseTab(caseUrl, "sources"));
         await settled(author);
@@ -218,8 +227,12 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await findings.locator("#fnd-statement").fill(FINDING);
         await findings
           .locator("#fnd-detail")
-          .fill("The statements show the payments and the company is controlled by the officer.");
-        await findings.getByRole("button", { name: /draft the finding/i }).click();
+          .fill(
+            "The statements show the payments and the company is controlled by the officer.",
+          );
+        await findings
+          .getByRole("button", { name: /draft the finding/i })
+          .click();
         await expect(findings.getByText(/F-\d{3} drafted/i)).toBeVisible();
 
         await author.goto(caseTab(caseUrl, "findings"));
@@ -273,7 +286,9 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await openForm(reports, /start a report/i);
         await reports.locator("#rpt-title").fill(REPORT_TITLE);
         await reports.locator("select#rpt-type").selectOption("final_report");
-        await reports.getByRole("button", { name: /start the report/i }).click();
+        await reports
+          .getByRole("button", { name: /start the report/i })
+          .click();
         await expect(reports.getByText(/RPT-\d{4}-\d{6}/i)).toBeVisible();
 
         await author.goto(caseTab(caseUrl, "reports"));
@@ -290,20 +305,24 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
       await test.step("a section that asserts something and cites nothing is refused", async () => {
         const sections = panel(author, "Sections");
         await openForm(sections, /add a section/i);
-        await sections.locator("#sec-heading-new").fill("What the payments show");
+        await sections
+          .locator("#sec-heading-new")
+          .fill("What the payments show");
         await sections.locator("select#sec-type-new").selectOption("finding");
         await sections
           .locator("#sec-body-new")
-          .fill("Three payments totalling GHS 480,000 went to a related company.");
-        await sections.getByRole("button", { name: /add the section/i }).click();
+          .fill(
+            "Three payments totalling GHS 480,000 went to a related company.",
+          );
+        await submitAndSettle(
+          sections.getByRole("button", { name: /add the section/i }),
+        );
 
         await author.goto(reportUrl);
         await settled(author);
 
         // The screen says which section, and why, before anybody tries.
-        await expect(
-          author.getByText(/cite nothing/i).first(),
-        ).toBeVisible();
+        await expect(author.getByText(/cite nothing/i).first()).toBeVisible();
 
         // And the server refuses it, which is the half that matters: the
         // warning is a courtesy, the refusal is the rule (PRD 10.2).
@@ -348,7 +367,9 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await where
           .locator("select#rpt-status")
           .selectOption("investigator_review");
-        await where.getByRole("button", { name: /put it forward/i }).click();
+        await submitAndSettle(
+          where.getByRole("button", { name: /put it forward/i }),
+        );
 
         await author.goto(reportUrl);
         await settled(author);
@@ -383,7 +404,9 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await settled(reviewer);
 
         const qa = panel(reviewer, "QA review");
-        await qa.getByRole("button", { name: /start a qa review/i }).click();
+        await submitAndSettle(
+          qa.getByRole("button", { name: /start a qa review/i }),
+        );
 
         await reviewer.goto(reportUrl);
         await settled(reviewer);
@@ -410,14 +433,16 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await expect(
           qa.getByRole("button", { name: /return for correction/i }),
         ).toBeVisible();
-        await expect(
-          qa.getByRole("button", { name: /pass it/i }),
-        ).toHaveCount(0);
+        await expect(qa.getByRole("button", { name: /pass it/i })).toHaveCount(
+          0,
+        );
 
         await qa
           .locator("#qa-summary")
           .fill("Correct the names, then put it forward again.");
-        await qa.getByRole("button", { name: /return for correction/i }).click();
+        await submitAndSettle(
+          qa.getByRole("button", { name: /return for correction/i }),
+        );
 
         await reviewer.goto(reportUrl);
         await settled(reviewer);
@@ -456,7 +481,9 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await reviewer.goto(reportUrl);
         await settled(reviewer);
         const qa = panel(reviewer, "QA review");
-        await qa.locator("#qa-summary").fill("Twelve for twelve. It can go out.");
+        await qa
+          .locator("#qa-summary")
+          .fill("Twelve for twelve. It can go out.");
         await qa.getByRole("button", { name: /pass it/i }).click();
       });
 
@@ -468,16 +495,18 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
           const where = panel(reviewer, "Where it is");
           await where.locator("select#rpt-status").selectOption(target);
           await where.locator("#rpt-notes").fill("Approved for release.");
-          await where
-            .getByRole("button", { name: /record the decision/i })
-            .click();
+          await submitAndSettle(
+            where.getByRole("button", { name: /record the decision/i }),
+          );
           await reviewer.goto(reportUrl);
           await settled(reviewer);
         }
 
         const delivery = panel(reviewer, "Client delivery");
         await openForm(delivery, /record a delivery/i);
-        await delivery.locator("#del-to").fill("Claims Director, ABC Insurance");
+        await delivery
+          .locator("#del-to")
+          .fill("Claims Director, ABC Insurance");
         await delivery.locator("select#del-method").selectOption("secure_link");
         await delivery
           .locator("#del-notes")
@@ -515,10 +544,14 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
 
       await closure
         .locator("#cl-objectives")
-        .fill("Both objectives met: the payments were traced and the control established.");
+        .fill(
+          "Both objectives met: the payments were traced and the control established.",
+        );
       await closure
         .locator("#cl-evidence")
-        .fill("All exhibits retained in the evidence register; nothing returned to the client.");
+        .fill(
+          "All exhibits retained in the evidence register; nothing returned to the client.",
+        );
       await closure.locator("#cl-outstanding").fill("None.");
       await closure
         .locator("#cl-financial")
@@ -527,7 +560,9 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
       await closure
         .locator("#cl-whatWorked")
         .fill("Going to the bank statements before the interviews.");
-      await closure.getByRole("button", { name: /propose closure/i }).click();
+      await submitAndSettle(
+        closure.getByRole("button", { name: /propose closure/i }),
+      );
 
       await page.goto(caseTab(caseUrl, "closure"));
       await settled(page);
@@ -560,9 +595,9 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
         await decision
           .locator("#cl-notes")
           .fill("Objectives met, evidence accounted for, nothing outstanding.");
-        await decision
-          .getByRole("button", { name: /record the decision/i })
-          .click();
+        await submitAndSettle(
+          decision.getByRole("button", { name: /record the decision/i }),
+        );
 
         await second.goto(caseTab(caseUrl, "closure"));
         await settled(second);
@@ -579,9 +614,7 @@ test.describe("a report from an accepted finding to a closed, archived case", ()
 
       // Screen 21: not a separate store. The archive links to the case
       // itself, which is what makes an archived case searchable at all.
-      await expect(
-        page.getByRole("link", { name: CASE_TITLE }),
-      ).toBeVisible();
+      await expect(page.getByRole("link", { name: CASE_TITLE })).toBeVisible();
       await page.getByRole("link", { name: CASE_TITLE }).click();
       await page.waitForURL(/\/cases\/[0-9a-f-]{36}/);
       await expect(

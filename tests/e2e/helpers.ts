@@ -200,6 +200,47 @@ export const panel = (page: Page, title: string) =>
  * panels replace the button with the form outright. Neither can happen
  * without the form being open, and neither happens before hydration.
  */
+/**
+ * Clicks a submit control and waits for its action to have finished.
+ *
+ * Navigating straight after clicking a submit is a race, and an expensive one
+ * to diagnose. The server action is still in flight; a `goto` renders the
+ * page again immediately, and because the action's transaction has not
+ * committed yet the fresh HTML describes the state BEFORE the write. Nothing
+ * re-renders after the commit, so the stale page sits there for the whole
+ * assertion window. The write has genuinely happened and the database is
+ * right, which is what makes it so confusing: the failure describes a page
+ * that cannot be reproduced a minute later, and it reads like a product bug.
+ *
+ * `ActionForm` disables its submit button while the action runs and shows
+ * "Saving", so the button coming back is the signal that the write landed and
+ * `router.refresh()` has rendered the result. Some forms are replaced
+ * outright on success, so a control that has gone is equally a finished
+ * action.
+ *
+ * The `[data-loading]` check is not padding. `router.refresh()` replaces a
+ * streamed panel with its skeleton on the way, so a control can be absent for
+ * a moment while the new data is still in flight. Treating that absence as a
+ * finished action puts the race straight back, which is a mistake worth
+ * naming because it looks like the fix.
+ *
+ * Better still, where there is one: wait for the state the action PRODUCES.
+ * A positive signal cannot be faked by a blank, whereas any "it has gone"
+ * check can. Most steps assert their success message, which is exactly that
+ * and needs nothing from this helper.
+ */
+export async function submitAndSettle(button: Locator): Promise<void> {
+  await button.click();
+
+  const page = button.page();
+
+  await expect(async () => {
+    expect(await page.locator("[data-loading]").count()).toBe(0);
+    if ((await button.count()) === 0) return;
+    expect(await button.isDisabled()).toBe(false);
+  }).toPass({ timeout: 60_000 });
+}
+
 export async function openForm(scope: Locator, name: RegExp) {
   const button = scope.getByRole("button", { name });
   if ((await button.count()) === 0) return;

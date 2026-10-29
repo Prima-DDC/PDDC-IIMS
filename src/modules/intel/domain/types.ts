@@ -340,6 +340,13 @@ export const MATCH_FLAG_STATUSES = [
   "same_entity",
   "different_entities",
   "undecided",
+  // Decided the same thing, and carried out. Distinct from `same_entity`,
+  // which is a decision nobody has acted on yet: without the distinction a
+  // merged pair still read as awaiting its merge, and the screen went on
+  // offering one that `assertMergeable` could only refuse. Reversing a merge
+  // returns the flag to `undecided`, so the decision has to be made again
+  // rather than silently standing.
+  "merged",
 ] as const;
 
 export type MatchFlagStatus = (typeof MATCH_FLAG_STATUSES)[number];
@@ -349,6 +356,7 @@ export const MATCH_FLAG_STATUS_LABELS: Record<MatchFlagStatus, string> = {
   same_entity: "The same thing",
   different_entities: "Different things",
   undecided: "Could not be decided",
+  merged: "Merged",
 };
 
 /* --------------------------------------------------------------- records */

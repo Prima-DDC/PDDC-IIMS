@@ -1558,6 +1558,84 @@ by inspecting the live platform rather than by reading documentation:
     role and comes back, that a statement moves to the survivor and returns
     to the loser, and that the move log ends fully restored.
 
+78. **A merge never closed the match flag that authorised it.** The flag's
+    statuses were open, same_entity, different_entities and undecided.
+    Nothing said "decided the same thing, and merged", so a merge left the
+    flag reading `same_entity` for ever.
+
+    The screen therefore kept offering "Merge ENT-NNNN into this record" for
+    a pair it had already merged, which `assertMergeable` can only refuse,
+    because a merged record is no longer a record but a pointer. Nothing
+    recorded whether a decision had been carried out either: two flags both
+    reading `same_entity`, one merged and one not, were indistinguishable
+    without going to `intel.entity_merges` to look, which is the sort of
+    question a register should answer about itself.
+
+    The reversal already assumed the missing state existed. It sets the flag
+    to `undecided` so that "the decision has to be made again rather than
+    silently standing", which only makes sense as the undoing of a closure.
+    It was reopening a flag that had never been closed.
+
+    Migration 0049 adds `merged`, sets it in the merge, and backfills from
+    `intel.entity_merges` rather than guessing: a flag is `merged` exactly
+    when a merge of that pair exists and has not been reversed. The UI needed
+    no change, because `MatchDecisionForm` already returns null for any status
+    other than `same_entity`, so closing the flag closes the control.
+
+79. **A rate-limited token refresh was read as "not signed in".** The
+    classifier added in entry 70 treated every 4xx as final, and 429 is a
+    4xx. `getUser` refreshes an expired access token on the way through,
+    Supabase rate-limits refreshes, and this project's auth limits are shared
+    with the live primaddc.com website, so a burst from either app can
+    produce one. "Too many requests" means ask again shortly; reading it as
+    "not signed in" signs out a valid session, and because the proxy then
+    clears the cookie the person re-types their password and their
+    authenticator code for nothing.
+
+    It presented as a test fixture landing on the sign-in page one minute
+    after a successful sign-in, with sessions that were provably still good
+    when tried by hand a moment later. 429 and 408 are now retryable, and the
+    retry waits 300ms first, because an immediate second call gets the same
+    answer from a rate limiter.
+
+80. **Three defects in the end-to-end journeys themselves, which produced
+    failures that looked exactly like product bugs.** Worth recording
+    together, because each one wasted more time than the product bug it was
+    hiding, and all three have the same shape: the test observed a state the
+    product was not in.
+
+    **A stamp shared across retries.** `const stamp = Date.now()` at module
+    scope is computed once per worker, so a retry reused it and searched a
+    name space it shared with the attempt that had just failed. The register
+    then held two companies with the same name, `/entities?search=<stamp>`
+    returned both, and the journey picked whichever sorted first, carrying
+    the dead attempt's half-finished flag and merge state. The stamp is now
+    derived per attempt from `testInfo.retry`.
+
+    **Navigating straight after a submit.** The action is still in flight;
+    `goto` renders the page again immediately, and because the transaction
+    has not committed the fresh HTML describes the state BEFORE the write.
+    Nothing re-renders after the commit, so the stale page stands for the
+    whole assertion window. The write has genuinely happened and the database
+    is right, which is what makes it so misleading: the failure reports a page
+    that cannot be reproduced a minute later. Seven instances of this were
+    found in the reporting journey and one in the intel journey, all written
+    the same day; every older step waits for its success message first, which
+    is why none of them had this problem.
+
+    **And the repair for it was wrong in the same way.** Waiting for the
+    control to GO looks correct and is not: `router.refresh()` replaces a
+    streamed panel with its skeleton on the way, so the count passes through
+    zero while the data is still in flight, the wait is satisfied by a blank,
+    and the navigation races the commit exactly as before.
+
+    The rule that falls out of it, now written into `submitAndSettle` and the
+    journey: **wait for the state the action produces, not for the absence of
+    the state it replaces.** A positive signal cannot be faked by a blank;
+    every "it has gone" check can. Migration 0049's `Merged` badge is what
+    made a positive wait available here, so the two fixes turned out to need
+    each other.
+
 ---
 
 ## Performance, measured

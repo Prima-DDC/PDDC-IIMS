@@ -36,28 +36,52 @@ import { caseTab, openForm, panel, selectContaining, settled } from "./helpers";
  *   although nothing linked the source.
  */
 
-const stamp = String(Date.now()).slice(-8);
-const CLIENT = `E2E Intel Client ${stamp}`;
-const CASE_TITLE = `E2E intelligence journey ${stamp}`;
-const COMPANY = `Delta Logistics ${stamp} Ltd`;
-const DUPLICATE = `Delta Logistics ${stamp} Ghana Limited`;
-// The run marker goes FIRST in both of these. The link and corroboration
-// pickers label an option with the first sixty characters of the
-// description, so a marker at the end is invisible to a test that looks
-// for it, which cost a full run to find.
-const STATEMENT = `Run ${stamp}: three payments of GHS 45,000 went to one account in April.`;
-const INTERVIEW = `Run ${stamp}: a former controller recalls the payments being approved verbally.`;
-const FINDING = `The three payments were authorised without a purchase order, run ${stamp}.`;
+const RUN = String(Date.now()).slice(-8);
+
+/**
+ * Every name this journey creates, from a stamp unique to the attempt.
+ *
+ * A module-level stamp is computed once per worker, so a retry reuses it and
+ * searches a name space it shares with the attempt that just failed. The
+ * register then holds two companies called the same thing, and
+ * `/entities?search=<stamp>` returns both: the journey picks whichever sorts
+ * first, which may be the dead attempt's record, carrying its half-finished
+ * flag and merge state. That produces a failure describing a page state the
+ * product cannot be made to show again, which is the worst kind to debug,
+ * and it cost most of an evening here.
+ *
+ * The run marker goes FIRST in the statement and interview descriptions. The
+ * link and corroboration pickers label an option with the first sixty
+ * characters of the description, so a marker at the end is invisible to a
+ * test that looks for it, which cost a full run to find.
+ */
+function names(stamp: string) {
+  return {
+    CLIENT: `E2E Intel Client ${stamp}`,
+    CASE_TITLE: `E2E intelligence journey ${stamp}`,
+    COMPANY: `Delta Logistics ${stamp} Ltd`,
+    DUPLICATE: `Delta Logistics ${stamp} Ghana Limited`,
+    STATEMENT: `Run ${stamp}: three payments of GHS 45,000 went to one account in April.`,
+    INTERVIEW: `Run ${stamp}: a former controller recalls the payments being approved verbally.`,
+    FINDING: `The three payments were authorised without a purchase order, run ${stamp}.`,
+  };
+}
 
 test.describe("subjects, sources, information and findings, end to end", () => {
   // The same reason the other journeys give: every step depends on the one
   // before it, and this one runs two people through a case in sequence.
   test.setTimeout(30 * 60 * 1000);
 
-  test("from a subject to an accepted, traceable finding", async ({
-    page,
-    browser,
-  }) => {
+  test("from a subject to an accepted, traceable finding", async (
+    { page, browser },
+    testInfo,
+  ) => {
+    // Unique to the attempt, so a retry cannot find the previous attempt's
+    // records. See the note on `names`.
+    const stamp = testInfo.retry > 0 ? `${RUN}r${testInfo.retry}` : RUN;
+    const { CLIENT, CASE_TITLE, COMPANY, DUPLICATE, STATEMENT, INTERVIEW, FINDING } =
+      names(stamp);
+
     const caseUrl = await openApprovedCase({
       page,
       browser,
@@ -535,14 +559,44 @@ test.describe("subjects, sources, information and findings, end to end", () => {
       admin.once("dialog", (dialog) => dialog.accept());
       await merge.getByRole("button", { name: /^Merge ENT-/i }).click();
 
-      // Asserted on the page the merge leaves behind, not on the banner.
-      // A successful merge takes the flag out of the undecided state, so the
-      // block holding the success message is legitimately gone by the time
-      // the re-render lands: the confirmation that lasts is the record
-      // itself. Waiting for the banner here would be waiting for something
-      // the design removes on purpose.
+      /*
+       * Wait for the merge to land ON THIS PAGE before navigating anywhere,
+       * and wait for it POSITIVELY.
+       *
+       * Two mistakes here cost a day between them, and the second was made
+       * while fixing the first.
+       *
+       * Navigating straight after the click is a race. The action is still in
+       * flight, `goto` renders the page again immediately, and because the
+       * transaction has not committed the fresh HTML still shows the flag as
+       * merely decided, with its merge button. Nothing re-renders after the
+       * commit, so that stale page sits there for the whole assertion window:
+       * the merge has genuinely happened, the database is right, and the
+       * failure describes a page nobody can reproduce a minute later.
+       *
+       * The obvious repair, waiting for the merge button to GO, is also
+       * wrong, and wrong in a way that looks right. `router.refresh()`
+       * replaces the panel with its loading skeleton on the way, so the
+       * button count passes through zero while the data is still in flight.
+       * The wait is satisfied by a blank, and the navigation races the commit
+       * exactly as before.
+       *
+       * So wait for the state the merge produces, not for the absence of the
+       * state it replaces. "Merged" on the flag can only be rendered from a
+       * committed merge; a skeleton cannot fake it, and migration 0049 is
+       * what put it there to be waited on.
+       */
+      await expect(
+        panel(admin, "Duplicates and matches").getByText(/^Merged$/),
+      ).toBeVisible();
+
+      // Then the same thing read fresh from the server, which proves it was
+      // persisted rather than only rendered.
       await admin.goto(entityUrl);
       await settled(admin);
+      await expect(
+        panel(admin, "Duplicates and matches").getByText(/^Merged$/),
+      ).toBeVisible();
       await expect(
         panel(admin, "Duplicates and matches").getByRole("button", {
           name: /^Merge ENT-/i,
