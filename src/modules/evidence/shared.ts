@@ -64,3 +64,21 @@ export {
   integrityVerdict,
   nextVersionLabel,
 } from "./domain/policies";
+
+/**
+ * File-type rules (PRD 14).
+ *
+ * In the client-safe barrel because the upload component uses the same
+ * allow-list to set its file picker's `accept` attribute. The picker is a
+ * convenience and the server check is the control; sharing the list is what
+ * stops them disagreeing about which is which.
+ */
+export {
+  PERMITTED_FILE_TYPES,
+  SIGNATURE_BYTES,
+  checkDeclaredType,
+  checkSignature,
+  extensionOf,
+  sniffType,
+} from "./domain/file-types";
+export type { FileTypeVerdict } from "./domain/file-types";

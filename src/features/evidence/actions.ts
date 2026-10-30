@@ -19,6 +19,7 @@ import {
   assertMovementHasBothEnds,
   assertOriginalFileImmutable,
   assertStatusMatchesCustody,
+  checkDeclaredType,
   evidence,
   isEvidenceError,
 } from "@/modules/evidence";
@@ -366,6 +367,31 @@ export async function attachEvidenceFile(
     if (!parsed.success) return invalidForm(parsed.error);
 
     const { evidenceRecordId, caseRecordId, storagePath, ...file } = parsed.data;
+
+    /*
+     * The file-type check PRD 14 asks for, server-side (PRD 14).
+     *
+     * The picker already restricts what can be chosen, and a picker is a
+     * convenience: this form is a POST and anybody can send one. So the
+     * allow-list is applied again here, where it is a control.
+     *
+     * It cannot tell a disguised file from an honest one, because everything
+     * it has is what the browser said. `verifyEvidence` reads the stored
+     * object's first bytes and settles that, which is the only place it can
+     * be settled.
+     */
+    const declared = checkDeclaredType({
+      fileName: file.fileName,
+      fileType: file.fileType,
+    });
+    if (!declared.ok) {
+      return {
+        ...EMPTY_FORM_STATE,
+        error: declared.reason,
+        fieldErrors: { fileName: "Not an accepted kind of file." },
+      };
+    }
+
     const api = evidence(actor);
 
     const item = await api.items.findById(evidenceRecordId);

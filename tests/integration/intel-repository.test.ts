@@ -59,9 +59,23 @@ async function inRolledBackTx(
   }
 }
 
+/**
+ * A fixture who can both run a case and handle evidence.
+ *
+ * Two roles rather than one, because PRD 16 gives an Operations Manager `V`
+ * on evidence and nothing more: they cannot register an item or attach a file
+ * to it. The role that does that work is the Investigator, whose upload
+ * ceiling reaches CONFIDENTIAL, which is what these fixtures use.
+ *
+ * It only started to matter with migration 0051. Registering and attaching
+ * go through row-level security, which this connection bypasses because
+ * `postgres` holds `rolbypassrls`, so the fixture's roles made no difference.
+ * `evidence.record_uploaded_file` checks the permission ITSELF, in the
+ * function body, and an explicit check is not something a bypass can skip.
+ */
 async function seedUser(
   tx: postgres.TransactionSql,
-  roles: string[] = ["operations_manager"],
+  roles: string[] = ["operations_manager", "investigator"],
   clearance = "STRICTLY_RESTRICTED",
 ): Promise<string> {
   const [{ id }] = await tx<{ id: string }[]>`

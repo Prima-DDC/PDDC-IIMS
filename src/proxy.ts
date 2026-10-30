@@ -15,8 +15,85 @@ import { sessionCookieOptions } from "@/lib/supabase/cookie-options";
 
 const PUBLIC_PATHS = /^\/(login|auth|no-access|_next|favicon|icons|manifest)/;
 
+/**
+ * The Content Security Policy (PRD 14: "strict CSP").
+ *
+ * Built per request around a fresh nonce, which is what makes it strict
+ * rather than decorative: `script-src` admits nothing but this request's
+ * nonce and whatever those scripts load themselves. Next reads the nonce back
+ * out of the header it receives and attaches it to its own framework and page
+ * bundles, so nothing has to be threaded through the layout.
+ *
+ * Two directives are looser than the rest and both are deliberate.
+ *
+ * `style-src` carries `'unsafe-inline'`. React writes `style` attributes for
+ * anything data-driven, and this platform has several: the width of a bar in
+ * a dashboard widget is a number from a query. CSP governs style ATTRIBUTES
+ * under `style-src`, so a nonce cannot cover them, and the alternatives are
+ * to emit a stylesheet per render or to give up data-driven widths. Inline
+ * style is not code execution, so it buys an attacker defacement rather than
+ * script, which is a different order of problem from `script-src
+ * 'unsafe-inline'`.
+ *
+ * `connect-src` and `img-src` name the Supabase project. Auth, storage and
+ * realtime all go directly from the browser to it, so its origin has to be
+ * allowed, and `wss:` is the realtime socket. Both are pinned to the one
+ * project rather than to `*.supabase.co`, so another tenant's bucket is not a
+ * permitted destination.
+ *
+ * `'unsafe-eval'` in development only, which Next requires: React uses `eval`
+ * there to rebuild server stack traces in the browser. Production has
+ * neither.
+ */
+function contentSecurityPolicy(nonce: string): string {
+  const supabase = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const development = process.env.NODE_ENV === "development";
+  const socket = supabase ? supabase.replace(/^https:/, "wss:") : "";
+
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${
+      development ? " 'unsafe-eval'" : ""
+    }`,
+    "style-src 'self' 'unsafe-inline'",
+    `img-src 'self' blob: data:${supabase ? ` ${supabase}` : ""}`,
+    "font-src 'self' data:",
+    `connect-src 'self'${supabase ? ` ${supabase} ${socket}` : ""}`,
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "media-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    // Belt and braces with the X-Frame-Options header in next.config.ts: this
+    // is the modern directive and that one is for anything predating it.
+    "frame-ancestors 'none'",
+    "upgrade-insecure-requests",
+  ].join("; ");
+}
+
+/** A redirect is a response too, and it should not be the one gap. */
+function withPolicy(response: NextResponse, csp: string): NextResponse {
+  response.headers.set("Content-Security-Policy", csp);
+  return response;
+}
+
 export async function proxy(request: NextRequest) {
-  let response = NextResponse.next({ request });
+  // Base64 of a uuid: unpredictable, and short enough not to bloat every
+  // script tag on the page.
+  const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
+  const csp = contentSecurityPolicy(nonce);
+
+  // On the REQUEST, because that is where Next looks for it when deciding
+  // which nonce to put on its own script tags. Setting it only on the
+  // response gives a correct header and unnonced scripts, which is a page
+  // that does not run.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nonce", nonce);
+  requestHeaders.set("Content-Security-Policy", csp);
+
+  let response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set("Content-Security-Policy", csp);
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -29,7 +106,11 @@ export async function proxy(request: NextRequest) {
         },
         setAll(cookiesToSet, cacheHeaders) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          response = NextResponse.next({ request });
+          // Rebuilt, so the forwarded headers and the policy have to go back
+          // on: a response created here without them reaches the renderer
+          // with no nonce to find.
+          response = NextResponse.next({ request: { headers: requestHeaders } });
+          response.headers.set("Content-Security-Policy", csp);
           cookiesToSet.forEach(({ name, value, options }) =>
             response.cookies.set(name, value, options),
           );
@@ -75,7 +156,7 @@ export async function proxy(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.search = pathname === "/" ? "" : `?next=${encodeURIComponent(pathname)}`;
-    return NextResponse.redirect(url);
+    return withPolicy(NextResponse.redirect(url), csp);
   }
 
   // This proxy and the page can disagree about who is signed in, and the
@@ -105,7 +186,7 @@ export async function proxy(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     url.search = "";
-    return NextResponse.redirect(url);
+    return withPolicy(NextResponse.redirect(url), csp);
   }
 
   // Investigative content must never sit in a shared cache (PRD 21.3).

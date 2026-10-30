@@ -1,6 +1,7 @@
 import "server-only";
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import { RATE_LIMITS, clientAddress, takeRateLimit } from "./rate-limit";
 
 /**
  * Authenticating a scheduled call.
@@ -22,7 +23,7 @@ export type CronOutcome<T> =
   | { ok: true; body: T }
   | { ok: false; response: NextResponse };
 
-export function authoriseCron(request: Request): NextResponse | null {
+export async function authoriseCron(request: Request): Promise<NextResponse | null> {
   const expected = process.env.CRON_WORKER_SECRET;
 
   if (!expected) {
@@ -49,6 +50,28 @@ export function authoriseCron(request: Request): NextResponse | null {
   // answer without the exception.
   if (a.length !== b.length || !timingSafeEqual(a, b)) {
     return NextResponse.json({ error: "Not authorised." }, { status: 401 });
+  }
+
+  /*
+   * Counted AFTER the secret is checked, so a flood of unauthenticated
+   * requests cannot exhaust the window and lock the real scheduler out of
+   * its own route. The secret is the gate; this is the brake behind it, for
+   * a scheduler that has got stuck.
+   */
+  const limit = await takeRateLimit(
+    `cron:${new URL(request.url).pathname}:${clientAddress(request)}`,
+    RATE_LIMITS.cron.limit,
+    RATE_LIMITS.cron.windowSeconds,
+  );
+
+  if (!limit.allowed) {
+    console.warn(
+      `[cron] ${new URL(request.url).pathname} called ${limit.hits} times in a minute, which is more than a schedule does`,
+    );
+    return NextResponse.json(
+      { error: "Called too often.", retryAfterSeconds: limit.retryAfterSeconds },
+      { status: 429, headers: { "retry-after": String(limit.retryAfterSeconds) } },
+    );
   }
 
   return null;

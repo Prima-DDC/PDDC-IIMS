@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState } from "react";
 import { Loader2, ShieldCheck, Upload, X } from "lucide-react";
+import { PERMITTED_FILE_TYPES } from "@/modules/evidence/shared";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Alert, Button, Field, Input, Muted } from "@/components/ui";
 
@@ -88,6 +89,19 @@ const EVIDENCE_FIELDS: UploadFieldNames = {
   sha256: "declaredSha256",
   storagePath: "storagePath",
 };
+
+/**
+ * The `accept` attribute, built from the server's own allow-list.
+ *
+ * Both the media types and the extensions, because browsers differ about
+ * which they honour: Safari has historically matched on extension and
+ * Chrome on type, and a picker that offers one of the two filters out files
+ * the platform would have accepted.
+ */
+const ACCEPTED_FILE_TYPES = [
+  ...Object.keys(PERMITTED_FILE_TYPES),
+  ...new Set(Object.values(PERMITTED_FILE_TYPES).flat()),
+].join(",");
 
 export function FileUpload({
   bucket,
@@ -188,6 +202,17 @@ export function FileUpload({
           ref={input}
           id={fieldId}
           type="file"
+          /*
+           * The same allow-list the server applies (PRD 14).
+           *
+           * A picker is a convenience and not a control: this is a form, and
+           * anybody can post one. `attachEvidenceFile` checks the declared
+           * type again, and `verifyEvidence` checks the bytes. Sharing the
+           * list means the three cannot disagree about what is acceptable,
+           * which is the failure that would leave somebody told at the end of
+           * an upload that the file was never allowed.
+           */
+          accept={ACCEPTED_FILE_TYPES}
           disabled={disabled || busy}
           onChange={(event) => {
             const file = event.target.files?.[0];

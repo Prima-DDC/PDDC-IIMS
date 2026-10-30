@@ -52,6 +52,7 @@ export default async function NewCasePage({
 
           <Card>
             <CaseForm
+            idempotencyKey={crypto.randomUUID()}
               reference={{
                 caseTypes: reference.caseTypes,
                 offices: reference.offices,

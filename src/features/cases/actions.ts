@@ -3,6 +3,8 @@
 import { refreshPath } from "@/lib/revalidate";
 import { EMPTY_FORM_STATE, invalidForm, type FormState } from "@/lib/forms";
 import { asActor, requireActorOrThrow, requirePermission } from "@/lib/auth/session";
+import { idempotent } from "@/lib/idempotency";
+import type { Actor } from "@/lib/auth/session";
 import {
   assertCanAddAssignment,
   assertCanRemoveAssignment,
@@ -83,12 +85,32 @@ function revalidateCase(caseRecordId?: string) {
 
 /* ------------------------------------------------------------------- case */
 
+/**
+ * Opening a case MINTS, so it carries an idempotency key (PRD 21.7).
+ *
+ * `config.next_human_id` hands out a number, and a duplicate submission is a
+ * second case with a second number rather than a refused edit. An edit is
+ * safe without a key, because it carries `expectedVersion` and a duplicate
+ * gets a 409.
+ *
+ * Split in two so the body keeps its own indentation: the wrapper resolves
+ * the actor, because a key is claimed as somebody.
+ */
 export async function createCase(
   _prev: FormState,
   formData: FormData,
 ): Promise<FormState> {
+  const actor = await requireActorOrThrow();
+  return idempotent(actor, "cases.create", formData, () =>
+    openCase(actor, formData),
+  );
+}
+
+async function openCase(
+  actor: Actor,
+  formData: FormData,
+): Promise<FormState> {
   return run(async () => {
-    const actor = await requireActorOrThrow();
     await requirePermission(actor, "cases", "create");
 
     const parsed = createCaseSchema.safeParse(Object.fromEntries(formData));

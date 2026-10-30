@@ -41,6 +41,7 @@ export default async function NewEngagementPage({
 
       <Card>
         <EngagementForm
+            idempotencyKey={crypto.randomUUID()}
           reference={reference}
           defaultClientId={params.clientId}
           defaultEnquiryId={params.enquiryId}

@@ -24,7 +24,7 @@ import { createRetrieval } from "@/features/ai/retrieval";
  * at 09:05. A stored prompt could not have noticed.
  */
 export async function POST(request: Request) {
-  const refusal = authoriseCron(request);
+  const refusal = await authoriseCron(request);
   if (refusal) return refusal;
 
   const started = Date.now();

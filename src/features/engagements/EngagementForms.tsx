@@ -48,11 +48,20 @@ export function EngagementForm({
   reference,
   defaultClientId,
   defaultEnquiryId,
+  idempotencyKey,
 }: {
   engagement?: Engagement;
   reference: Reference;
   defaultClientId?: string;
   defaultEnquiryId?: string;
+  /**
+   * A token from the server component rendering this form (PRD 21.7).
+   *
+   * Only the "new" pages pass one, because only creating mints a record: an
+   * edit carries `expectedVersion`, so a duplicate gets a 409 rather than a
+   * second row.
+   */
+  idempotencyKey?: string;
 }) {
   const editing = engagement !== undefined;
   const frozen =
@@ -63,6 +72,7 @@ export function EngagementForm({
   return (
     <ActionForm
       action={editing ? updateEngagement : createEngagement}
+      idempotencyKey={idempotencyKey}
       submitLabel={
         editing ? (
           <>

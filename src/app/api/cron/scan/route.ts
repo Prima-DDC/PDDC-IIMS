@@ -17,7 +17,7 @@ import { runScheduledScans } from "@/modules/notify";
  * twice, tells nobody twice.
  */
 export async function POST(request: Request) {
-  const refusal = authoriseCron(request);
+  const refusal = await authoriseCron(request);
   if (refusal) return refusal;
 
   const started = Date.now();

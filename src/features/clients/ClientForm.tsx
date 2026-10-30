@@ -28,18 +28,28 @@ export function ClientForm({
   countries,
   levels,
   people,
+  idempotencyKey,
 }: {
   client?: Client;
   offices: Array<{ id: string; name: string }>;
   countries: Array<{ code: string; name: string }>;
   levels: Array<{ code: string; name: string }>;
   people: Array<{ id: string; name: string }>;
+  /**
+   * A token from the server component rendering this form (PRD 21.7).
+   *
+   * Only the "new" pages pass one, because only creating mints a record: an
+   * edit carries `expectedVersion`, so a duplicate gets a 409 rather than a
+   * second row.
+   */
+  idempotencyKey?: string;
 }) {
   const editing = client !== undefined;
 
   return (
     <ActionForm
       action={editing ? updateClient : createClient}
+      idempotencyKey={idempotencyKey}
       submitLabel={
         editing ? (
           <>

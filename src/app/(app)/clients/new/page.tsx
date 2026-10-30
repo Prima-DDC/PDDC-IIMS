@@ -31,6 +31,7 @@ export default async function NewClientPage() {
 
       <Card>
         <ClientForm
+            idempotencyKey={crypto.randomUUID()}
           offices={offices}
           countries={countries}
           levels={levels}

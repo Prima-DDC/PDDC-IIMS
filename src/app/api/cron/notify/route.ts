@@ -17,7 +17,7 @@ import { drainEmailOutbox } from "@/modules/notify";
  * than describing anything about the call.
  */
 export async function POST(request: Request) {
-  const refusal = authoriseCron(request);
+  const refusal = await authoriseCron(request);
   if (refusal) return refusal;
 
   const started = Date.now();

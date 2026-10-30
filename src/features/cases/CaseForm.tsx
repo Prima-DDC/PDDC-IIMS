@@ -43,12 +43,21 @@ export function CaseForm({
   reference,
   engagements,
   defaultEngagementId,
+  idempotencyKey,
 }: {
   record?: Case;
   reference: Reference;
   /** Only engagements a case can actually be opened against. */
   engagements?: Array<{ id: string; clientId: string; name: string }>;
   defaultEngagementId?: string;
+  /**
+   * A token from the server component rendering this form (PRD 21.7).
+   *
+   * Only the "new" pages pass one, because only creating mints a record: an
+   * edit carries `expectedVersion`, so a duplicate gets a 409 rather than a
+   * second row.
+   */
+  idempotencyKey?: string;
 }) {
   const editing = record !== undefined;
   const [engagementId, setEngagementId] = useState(
@@ -60,6 +69,7 @@ export function CaseForm({
   return (
     <ActionForm
       action={editing ? updateCase : createCase}
+      idempotencyKey={idempotencyKey}
       submitLabel={
         editing ? (
           <>

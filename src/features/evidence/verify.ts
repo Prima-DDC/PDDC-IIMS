@@ -5,7 +5,12 @@ import { refreshPath } from "@/lib/revalidate";
 import { EMPTY_FORM_STATE, invalidForm, type FormState } from "@/lib/forms";
 import { requireActorOrThrow, requirePermission } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { evidence, isEvidenceError } from "@/modules/evidence";
+import {
+  SIGNATURE_BYTES,
+  checkSignature,
+  evidence,
+  isEvidenceError,
+} from "@/modules/evidence";
 import { isIamError } from "@/modules/iam";
 import { verifyEvidenceSchema } from "./schema";
 
@@ -33,17 +38,40 @@ import { verifyEvidenceSchema } from "./schema";
  * the day somebody uploads three at once.
  */
 
-async function sha256OfStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+/**
+ * Hashes the object and keeps its first bytes.
+ *
+ * One pass, two answers. The hash is what PRD 6.3 asks for; the header is
+ * what answers PRD 14's other question, which is whether the file is what it
+ * said it was. Reading the object twice to ask them separately would double
+ * the egress on every verification for no gain, and the header is sixteen
+ * bytes of the first chunk either way.
+ */
+async function digestAndHeader(
+  stream: ReadableStream<Uint8Array>,
+): Promise<{ sha256: string; head: Uint8Array }> {
   const hash = createHash("sha256");
   const reader = stream.getReader();
+  const head = new Uint8Array(SIGNATURE_BYTES);
+  let filled = 0;
 
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    if (value) hash.update(value);
+    if (!value) continue;
+
+    hash.update(value);
+
+    // A chunk boundary can fall inside the first sixteen bytes, so this fills
+    // across chunks rather than assuming the first one is long enough.
+    if (filled < SIGNATURE_BYTES) {
+      const take = Math.min(SIGNATURE_BYTES - filled, value.length);
+      head.set(value.subarray(0, take), filled);
+      filled += take;
+    }
   }
 
-  return hash.digest("hex");
+  return { sha256: hash.digest("hex"), head: head.subarray(0, filled) };
 }
 
 export async function verifyEvidence(
@@ -98,23 +126,59 @@ export async function verifyEvidence(
       };
     }
 
-    const computed = await sha256OfStream(
+    const { sha256: computed, head } = await digestAndHeader(
       download.data.stream() as ReadableStream<Uint8Array>,
     );
     const matched = computed === item.declaredSha256;
 
+    /*
+     * Whether the file is what it claimed to be (PRD 14).
+     *
+     * This is the check that cannot be done at upload: everything the upload
+     * had was what the browser reported, and a browser reports whatever the
+     * extension implies. An executable renamed `statement.pdf` passes the
+     * allow-list and fails here, on its first two bytes.
+     *
+     * A disguised file is recorded as a MISMATCH even when the hash agrees,
+     * and that is the right verdict rather than a harsh one: the hash proves
+     * the object is the one that was uploaded, and this proves the object is
+     * not what the register says it is. An item whose register entry is
+     * wrong cannot be cited in a report, which is exactly what `mismatch`
+     * means here.
+     */
+    const signature = item.fileType
+      ? checkSignature({ declaredType: item.fileType, head })
+      : { ok: true, reason: null };
+
+    const result = !matched || !signature.ok ? "mismatch" : "match";
+
     const verified = await api.items.recordVerification({
       id: evidenceRecordId,
       computedSha256: computed,
-      result: matched ? "match" : "mismatch",
-      notes: matched
-        ? null
-        : "The stored file does not match the hash declared when it was uploaded.",
+      result,
+      notes: [
+        matched
+          ? null
+          : "The stored file does not match the hash declared when it was uploaded.",
+        signature.reason,
+      ]
+        .filter(Boolean)
+        .join(" ") || null,
     });
 
     refreshPath(`/evidence/${evidenceRecordId}`);
     refreshPath(`/cases/${caseRecordId}`);
     refreshPath("/evidence");
+
+    if (matched && !signature.ok) {
+      // Worth its own message. "Does not match" would send somebody looking
+      // for a corrupted upload, and the file is intact: it is a different
+      // kind of file from the one the register describes.
+      return {
+        ...EMPTY_FORM_STATE,
+        error: `${verified.evidenceId} is intact but it is not the kind of file it was recorded as. ${signature.reason} That is now permanently recorded, and the item cannot be cited in a report until it is resolved.`,
+      };
+    }
 
     return matched
       ? {

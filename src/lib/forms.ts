@@ -20,6 +20,16 @@ export interface FormState {
 
 export const EMPTY_FORM_STATE: FormState = { error: null, success: null };
 
+/**
+ * The hidden field carrying a form's idempotency key (PRD 14, 21.7).
+ *
+ * Here rather than in `@/lib/idempotency` because that module is
+ * `server-only` and `ActionForm` is a client component: a name shared across
+ * that boundary has to live somewhere both may import. The mechanism is in
+ * `@/lib/idempotency`; this is just the agreed name for it.
+ */
+export const IDEMPOTENCY_FIELD = "__key";
+
 /** Collapses a zod error into the flat map the forms render. */
 export function toFieldErrors(error: z.ZodError): Record<string, string> {
   const out: Record<string, string> = {};

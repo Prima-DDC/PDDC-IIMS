@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { can, requireActor } from "@/lib/auth/session";
+import { RATE_LIMITS, takeRateLimit } from "@/lib/rate-limit";
 import { getManagementReport } from "@/features/reporting/queries";
 
 /**
@@ -34,6 +35,35 @@ export async function GET() {
     return NextResponse.json(
       { error: "You do not have permission to export management reports." },
       { status: 403 },
+    );
+  }
+
+  /*
+   * Limited per person, after the permission check (PRD 14).
+   *
+   * Each call is a full read of the case register, and PRD 14 lists mass
+   * downloads among the things to watch for. Twenty an hour is far more than
+   * anybody does by hand, so reaching it is either a script or a mistake, and
+   * either is worth stopping. Per actor rather than per address: an office
+   * shares an address and should not share a limit.
+   */
+  const limit = await takeRateLimit(
+    `export:management:${actor.userId}`,
+    RATE_LIMITS.export.limit,
+    RATE_LIMITS.export.windowSeconds,
+  );
+
+  if (!limit.allowed) {
+    return NextResponse.json(
+      {
+        error: `That is ${limit.hits} exports within the hour. Wait ${Math.ceil(
+          limit.retryAfterSeconds / 60,
+        )} minutes, or read the figures on the screen, which are the same ones.`,
+      },
+      {
+        status: 429,
+        headers: { "retry-after": String(limit.retryAfterSeconds) },
+      },
     );
   }
 

@@ -3,6 +3,8 @@
 import { refreshPath } from "@/lib/revalidate";
 import { EMPTY_FORM_STATE, invalidForm, type FormState } from "@/lib/forms";
 import { requireActorOrThrow, requirePermission } from "@/lib/auth/session";
+import { idempotent } from "@/lib/idempotency";
+import type { Actor } from "@/lib/auth/session";
 import { assertClientRemovable, crm, isCrmError } from "@/modules/crm";
 import { isIamError } from "@/modules/iam";
 import {
@@ -56,12 +58,25 @@ function revalidateClient(clientId?: string) {
 
 /* ------------------------------------------------------------------ client */
 
+/**
+ * Creating a client MINTS a `CLI-` identifier, so it carries an idempotency
+ * key (PRD 21.7). An edit does not need one: it carries `expectedVersion`.
+ */
 export async function createClient(
   _prev: FormState,
   formData: FormData,
 ): Promise<FormState> {
+  const actor = await requireActorOrThrow();
+  return idempotent(actor, "clients.create", formData, () =>
+    createClientRecord(actor, formData),
+  );
+}
+
+async function createClientRecord(
+  actor: Actor,
+  formData: FormData,
+): Promise<FormState> {
   return run(async () => {
-    const actor = await requireActorOrThrow();
     await requirePermission(actor, "clients", "create");
 
     const parsed = createClientSchema.safeParse(Object.fromEntries(formData));
