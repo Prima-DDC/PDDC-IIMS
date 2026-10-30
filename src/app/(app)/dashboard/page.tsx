@@ -1,37 +1,83 @@
-import { AppLink } from "@/components/AppLink";
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import {
-  Activity,
-  ArrowRight,
-  Briefcase,
-  CheckSquare,
-  ShieldAlert,
-} from "lucide-react";
+import { forbidden } from "next/navigation";
 import { Alert, Badge, Card, DescriptionList, PageHeader } from "@/components/ui";
 import { can, requireActor } from "@/lib/auth/session";
 import { CLASSIFICATION_LABELS } from "@/modules/iam";
+import { getDashboardAccess } from "@/features/dashboard/queries";
+import {
+  FinanceWidgets,
+  ManagementWidgets,
+  OperationsWidgets,
+  PersonalWidgets,
+  QaWidgets,
+  QuickLinks,
+  TeamWidgets,
+  WidgetSkeleton,
+} from "@/features/dashboard/DashboardWidgets";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
 /**
- * Role dashboard.
+ * The dashboard (PRD 11, screens 2 and 3).
  *
- * Widgets load independently inside their own Suspense boundary, so one slow
- * query never blocks the page (PRD 11). The full widget set per role arrives
- * with the dashboards milestone; what is here now is wired to real data and
- * real permissions rather than placeholder numbers.
+ * PRD 11 names six dashboards and PRD 16's last row maps each role to one.
+ * This is one page that renders the groups of widgets the viewer's
+ * permissions entitle them to, which is the same thing for a single-role
+ * employee and a better answer for everybody else: a role is data an
+ * administrator can rename or re-scope, and somebody holding two roles gets
+ * the union of their permissions (PRD 3.2), so they should get the union of
+ * their widgets. `src/features/dashboard/queries.ts` sets out the reasoning
+ * and the permission behind each group.
+ *
+ * Every group is its own Suspense boundary, so one slow query never blocks
+ * the page: PRD 11's "widgets load lazily and independently", which matters
+ * most here because the management group is the heaviest read in the
+ * platform and an investigator must not wait for it. They never ask for it
+ * either, because the gate is checked before the component is rendered.
  */
 export default async function DashboardPage() {
   const actor = await requireActor();
 
-  const [maySeeUsers, maySeeCases, maySeeTasks] = await Promise.all([
-    can(actor, "users", "view"),
-    can(actor, "cases", "view"),
-    can(actor, "tasks", "view"),
-  ]);
+  // There is a permission for this, and PRD 16 gives it to every role, so it
+  // is checked rather than assumed: an account provisioned with a custom role
+  // that withholds it should land on a refusal, not a blank page.
+  if (!(await can(actor, "dashboards", "view"))) {
+    forbidden();
+  }
 
+  const access = await getDashboardAccess(actor);
   const firstName = actor.fullName?.split(" ")[0] ?? "there";
+
+  const quickLinks = [
+    access.mayViewCases && {
+      href: "/cases",
+      label: "Cases",
+      body: "Open investigations you are authorised for.",
+    },
+    access.mayViewTasks && {
+      href: "/tasks",
+      label: "Tasks",
+      body: "What is due, overdue or blocked.",
+    },
+    {
+      href: "/safety",
+      label: "Safety",
+      body: "Field check-in and incident reporting.",
+    },
+    access.mayViewReports && {
+      href: "/reports",
+      label: "Reports",
+      body: "Drafts, reviews and approved versions.",
+    },
+    access.mayViewUsers && {
+      href: "/admin/users",
+      label: "Administration",
+      body: "Accounts, roles and access.",
+    },
+  ].filter((item): item is { href: string; label: string; body: string } =>
+    Boolean(item),
+  );
 
   return (
     <div className="space-y-6">
@@ -46,6 +92,59 @@ export default async function DashboardPage() {
           security settings before your next sign-in.
         </Alert>
       )}
+
+      {/*
+        Personal first, for everybody including the CEO. Whatever else
+        somebody is responsible for, the first question a dashboard should
+        answer is what is waiting on them personally.
+      */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Suspense fallback={<WidgetSkeleton rows={2} />}>
+          <PersonalWidgets />
+        </Suspense>
+      </div>
+
+      {access.groups.includes("operations") && (
+        <Section title="Operations">
+          <Suspense fallback={<WidgetSkeleton rows={3} />}>
+            <OperationsWidgets />
+          </Suspense>
+        </Section>
+      )}
+
+      {access.groups.includes("team") && (
+        <Section title="Your team">
+          <Suspense fallback={<WidgetSkeleton rows={3} />}>
+            <TeamWidgets />
+          </Suspense>
+        </Section>
+      )}
+
+      {access.groups.includes("qa") && (
+        <Section title="Quality assurance">
+          <Suspense fallback={<WidgetSkeleton rows={3} />}>
+            <QaWidgets />
+          </Suspense>
+        </Section>
+      )}
+
+      {access.groups.includes("management") && (
+        <Section title="Management">
+          <Suspense fallback={<WidgetSkeleton rows={4} />}>
+            <ManagementWidgets />
+          </Suspense>
+        </Section>
+      )}
+
+      {access.groups.includes("finance") && (
+        <Section title="Finance">
+          <Suspense fallback={<WidgetSkeleton rows={3} />}>
+            <FinanceWidgets />
+          </Suspense>
+        </Section>
+      )}
+
+      <QuickLinks items={quickLinks} />
 
       <Card title="Your access" description="What this account can see and do.">
         <DescriptionList
@@ -69,130 +168,23 @@ export default async function DashboardPage() {
           ]}
         />
       </Card>
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {maySeeCases && (
-          <QuickLink
-            href="/cases"
-            icon={Briefcase}
-            title="Cases"
-            body="Open investigations you are assigned to."
-          />
-        )}
-        {maySeeTasks && (
-          <QuickLink
-            href="/tasks"
-            icon={CheckSquare}
-            title="Tasks"
-            body="What is due, overdue or blocked."
-          />
-        )}
-        <QuickLink
-          href="/safety"
-          icon={ShieldAlert}
-          title="Safety"
-          body="Field check-in and incident reporting."
-        />
-        {maySeeUsers && (
-          <Suspense fallback={<WidgetSkeleton />}>
-            <UserAdminWidget />
-          </Suspense>
-        )}
-      </div>
     </div>
   );
 }
 
-/**
- * Administration summary. Its own component so its query sits behind a
- * Suspense boundary and does not delay the rest of the page.
- */
-async function UserAdminWidget() {
-  const actor = await requireActor();
-  const { iam } = await import("@/modules/iam");
-  const stats = await iam(actor).users.stats();
-
-  return (
-    <Card title="Administration" description="Accounts on the platform.">
-      <dl className="grid grid-cols-2 gap-3 text-sm">
-        <Stat label="Active" value={stats.active} />
-        <Stat label="Invited" value={stats.invited} />
-        <Stat label="Suspended" value={stats.suspended} tone={stats.suspended > 0 ? "warn" : undefined} />
-        <Stat
-          label="Without MFA"
-          value={stats.withoutMfa}
-          tone={stats.withoutMfa > 0 ? "danger" : undefined}
-        />
-      </dl>
-
-      <AppLink
-        href="/admin/users"
-        className="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-signal-dark hover:underline"
-      >
-        Manage users
-        <ArrowRight className="size-3.5" aria-hidden="true" />
-      </AppLink>
-    </Card>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone?: "warn" | "danger";
-}) {
-  const colour =
-    tone === "danger" ? "text-danger" : tone === "warn" ? "text-warn" : "text-body";
-  return (
-    <div>
-      <dt className="text-[10.5px] tracking-wide text-faint uppercase">{label}</dt>
-      <dd className={`text-xl font-semibold ${colour}`}>{value}</dd>
-    </div>
-  );
-}
-
-function QuickLink({
-  href,
-  icon: Icon,
+function Section({
   title,
-  body,
+  children,
 }: {
-  href: string;
-  icon: typeof Activity;
   title: string;
-  body: string;
+  children: React.ReactNode;
 }) {
   return (
-    <AppLink
-      href={href}
-      className="card group rounded-xl p-4 transition-colors hover:border-signal/40"
-    >
-      <span className="grid size-9 place-items-center rounded-lg bg-signal/10 text-signal-dark">
-        <Icon className="size-4.5" aria-hidden="true" />
-      </span>
-      <p className="mt-3 text-sm font-semibold text-body">{title}</p>
-      <p className="mt-0.5 text-xs text-muted">{body}</p>
-      <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-signal-dark">
-        Open
-        <ArrowRight
-          className="size-3.5 transition-transform group-hover:translate-x-0.5"
-          aria-hidden="true"
-        />
-      </span>
-    </AppLink>
-  );
-}
-
-function WidgetSkeleton() {
-  return (
-    <div className="card space-y-3 rounded-xl p-4">
-      <div className="skeleton h-3 w-24" />
-      <div className="skeleton h-7 w-16" />
-      <div className="skeleton h-3 w-full" />
-    </div>
+    <section className="space-y-3">
+      <h2 className="text-[11px] font-semibold tracking-[0.08em] text-faint uppercase">
+        {title}
+      </h2>
+      <div className="grid gap-4 lg:grid-cols-2">{children}</div>
+    </section>
   );
 }

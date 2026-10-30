@@ -65,3 +65,36 @@ export const classificationLevels = cache(
   async (actor: Actor, tx?: postgres.TransactionSql) =>
     iam(actor, tx).org.classificationLevels(),
 );
+
+/**
+ * Who can do a particular thing, for a notification with an audience rather
+ * than a recipient.
+ *
+ * PRD 8.3 needs a manager to decide a possible conflict and PRD 5.8 needs the
+ * supervisor and Operations Manager told about a missed check-in, and in
+ * neither case is anybody named in advance: the audience is whoever holds the
+ * permission at the time. Reading `iam.users` to work that out is exactly the
+ * problem `staffDirectory` above describes, so this goes through
+ * `iam.permission_holders`, which returns ids and nothing else. See migration
+ * 0057.
+ *
+ * Ids, deliberately. They are passed straight back into `notify.publish`,
+ * which reads the directory itself, so the caller never handles a colleague's
+ * name or address in order to send them something.
+ */
+export const permissionHolders = cache(
+  async (
+    actor: Actor,
+    resource: string,
+    action: string,
+    tx?: postgres.TransactionSql,
+  ): Promise<string[]> => {
+    const read = (sql: postgres.TransactionSql) =>
+      sql<{ id: string }[]>`
+        select id from iam.permission_holders(${resource}, ${action})
+      `;
+
+    const rows = tx ? await read(tx) : await asActor(actor, read);
+    return rows.map((row) => row.id);
+  },
+);

@@ -99,6 +99,21 @@ const ENTRIES: NavEntry[] = [
     requires: { resource: "entities", action: "view" },
   },
   {
+    // No permission either: global search asks each module the question that
+    // module already answers, under its own policy, so somebody with no
+    // permissions finds nothing rather than being refused the screen.
+    href: "/search",
+    label: "Search",
+    icon: "search",
+  },
+  {
+    // No permission: a notification is addressed to one person and the policy
+    // admits only its recipient, so there is nothing here to gate.
+    href: "/notifications",
+    label: "Notifications",
+    icon: "notifications",
+  },
+  {
     href: "/safety",
     label: "Safety",
     icon: "safety",

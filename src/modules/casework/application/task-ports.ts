@@ -113,7 +113,17 @@ export interface TaskRepository {
 /* ------------------------------------------------------------ activities */
 
 export interface ListActivitiesFilter {
-  caseId: string;
+  /**
+   * One case, or every case the caller can reach.
+   *
+   * Optional because PRD 11 gives an investigator a "My Activities" widget,
+   * and that question is not about a case: it is "what have I been doing".
+   * Row-level security answers the rest, so an omitted case id widens the
+   * view to exactly the cases this person is on and no further.
+   */
+  caseId?: string;
+  /** Activities this person recorded, which is what "mine" means. */
+  recordedBy?: string;
   activityType?: ActivityType;
   from?: string;
   to?: string;

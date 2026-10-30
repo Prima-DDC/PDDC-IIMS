@@ -2,7 +2,7 @@
 
 import { refreshPath } from "@/lib/revalidate";
 import { EMPTY_FORM_STATE, invalidForm, type FormState } from "@/lib/forms";
-import { requireActorOrThrow, requirePermission } from "@/lib/auth/session";
+import { asActor, requireActorOrThrow, requirePermission } from "@/lib/auth/session";
 import {
   assertCanAddAssignment,
   assertCanRemoveAssignment,
@@ -22,6 +22,10 @@ import {
 } from "@/modules/casework";
 import { crm, isCrmError } from "@/modules/crm";
 import { isIamError } from "@/modules/iam";
+import {
+  notifyCaseAssigned,
+  notifyCaseStageChange,
+} from "@/features/notifications/producers";
 import {
   approveRiskSchema,
   assignSchema,
@@ -194,10 +198,30 @@ export async function moveStage(
       assertObjectiveOrOverride(record);
     }
 
-    const moved = await api.cases.moveToStage({
-      id: caseRecordId,
-      toStageId,
-      reason: reason ?? null,
+    // Read before the write opens, so the transaction holds nothing but the
+    // change and its notifications.
+    const assignments = await api.cases.assignments(caseRecordId);
+
+    const moved = await asActor(actor, async (tx) => {
+      const result = await casework(actor, tx).cases.moveToStage({
+        id: caseRecordId,
+        toStageId,
+        reason: reason ?? null,
+      });
+
+      // Everybody on the case, because a stage change is what tells the team
+      // what the case now is. The person who moved it is skipped by
+      // `notify.publish`, which is where "do not tell me what I just did"
+      // belongs: in one place rather than in every producer.
+      await notifyCaseStageChange(actor, tx, {
+        caseRecord: { id: result.id, reference: result.caseId },
+        stageName: result.stageName,
+        audience: assignments
+          .filter((a) => a.unassignedAt === null)
+          .map((a) => a.userId),
+      });
+
+      return result;
     });
 
     revalidateCase(caseRecordId);
@@ -516,11 +540,28 @@ export async function assignToCase(
     const current = await api.cases.assignments(caseRecordId);
     assertCanAddAssignment(role, current, userId);
 
-    const assignment = await api.cases.assign({
-      caseId: caseRecordId,
-      userId,
-      role,
-      reason,
+    const assignment = await asActor(actor, async (tx) => {
+      const created = await casework(actor, tx).cases.assign({
+        caseId: caseRecordId,
+        userId,
+        role,
+        reason,
+      });
+
+      // Being put on a case is the notification that matters most in this
+      // platform: it is also the thing that grants access to it, so somebody
+      // who is not told has work waiting that they cannot know about.
+      await notifyCaseAssigned(actor, tx, {
+        userId,
+        role,
+        caseRecord: {
+          id: record.id,
+          reference: record.caseId,
+          title: record.title,
+        },
+      });
+
+      return created;
     });
 
     revalidateCase(caseRecordId);

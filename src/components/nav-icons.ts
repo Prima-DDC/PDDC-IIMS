@@ -1,4 +1,5 @@
 import {
+  Bell,
   Briefcase,
   CheckSquare,
   Handshake,
@@ -14,6 +15,7 @@ import {
   Network,
   Radio,
   Scale as ScaleIcon,
+  Search,
   Scale,
   ShieldAlert,
   Users,
@@ -46,6 +48,8 @@ export const NAV_ICONS = {
   sources: Radio,
   information: ScaleIcon,
   activities: ClipboardList,
+  notifications: Bell,
+  search: Search,
   safety: ShieldAlert,
   users: Users,
   audit: Scale,

@@ -90,7 +90,7 @@ function transporter(): Transporter {
 }
 
 /**
- * The email body, rendered from the template and the safe parameters.
+ * The email body, rendered from the safe parameters.
  *
  * This is the only place an email body comes into existence, which is the
  * design: `notify.outbox` has no body column, so there is nowhere for case
@@ -98,11 +98,17 @@ function transporter(): Transporter {
  * anything but the five permitted keys. The body therefore says what
  * happened only in general terms and points at the platform, where the
  * reader's own permissions decide what they see.
+ *
+ * The template name is deliberately NOT a parameter. It is stored on the
+ * outbox row and passed to the port, because a provider that renders its own
+ * templates needs it, but nothing here reads it: the heading and the subject
+ * come from `categoryLabel`, which `notify.publish` fills from
+ * `notify.categories`. That is what keeps an email and the platform saying
+ * the same thing. A second copy of the thirteen labels in TypeScript would
+ * drift from the catalogue the moment PDDC relabelled one, and PRD 12.1's
+ * catalogue is data precisely so they can.
  */
-function render(
-  template: string,
-  params: EmailParams,
-): { subject: string; html: string } {
+function render(params: EmailParams): { subject: string; html: string } {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://iims.primaddc.com";
   const label = params.categoryLabel ?? "Notification";
   const greeting = params.recipientName ? `${params.recipientName},` : "Hello,";
@@ -150,13 +156,13 @@ function render(
 
 export function createSmtpEmail(): EmailPort {
   return {
-    async send({ to, template, params, idempotencyKey }) {
+    async send({ to, params, idempotencyKey }) {
       // The same rule the database enforces, checked again here because this
       // is the last moment before the content leaves the platform.
       assertEmailCarriesNoCaseContent(params);
 
       const { user, fromName } = settings();
-      const { subject, html } = render(template, params);
+      const { subject, html } = render(params);
 
       const info = await transporter().sendMail({
         from: { name: fromName, address: user },

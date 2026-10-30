@@ -50,9 +50,26 @@ async function inRolledBackTx(
   }
 }
 
+/**
+ * A fixture who can both run a case and handle evidence.
+ *
+ * Two roles rather than one, and the reason is PRD 16 rather than
+ * convenience: an Operations Manager has `V` on evidence and nothing more,
+ * so they cannot register an item or attach a file to it. The role that does
+ * that work is the Investigator.
+ *
+ * It only started to matter with migration 0051. Registering an item and
+ * attaching a file go through row-level security, which this connection
+ * bypasses because `postgres` holds `rolbypassrls`, so the fixture's roles
+ * made no difference to them. `evidence.record_uploaded_file` checks
+ * `evidence:upload` ITSELF, in the function body, and an explicit check is
+ * not something a bypass can skip. The test was asserting repository
+ * behaviour with a fixture that would have been refused in the product, and
+ * only the one explicit check noticed.
+ */
 async function seedUser(
   tx: postgres.TransactionSql,
-  roles: string[] = ["operations_manager"],
+  roles: string[] = ["operations_manager", "investigator"],
 ): Promise<string> {
   const [{ id }] = await tx<{ id: string }[]>`
     select extensions.gen_random_uuid() as id
@@ -489,7 +506,7 @@ suite("the chain of custody", () => {
   async function withItem(
     tx: postgres.TransactionSql,
     name: string,
-    roles: string[] = ["operations_manager"],
+    roles: string[] = ["operations_manager", "investigator"],
   ) {
     const user = await seedUser(tx, roles);
     const actor = actorFor(user);

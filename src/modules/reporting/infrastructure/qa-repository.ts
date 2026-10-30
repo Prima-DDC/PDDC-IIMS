@@ -156,6 +156,51 @@ export function createQaRepository(
       });
     },
 
+    async commonFailures(limit = 6) {
+      return tx(async (sql) => {
+        const rows = await sql<
+          {
+            item_key: string;
+            label: string;
+            failures: string;
+            reviews_answered: string;
+          }[]
+        >`
+          select
+            i.key as item_key,
+            i.label,
+            count(*) filter (where ri.result = 'fail')::text as failures,
+            -- Not-applicable answers are excluded from the denominator: a
+            -- check that did not apply was not passed either, and counting
+            -- it would understate how often the ones that DO apply fail.
+            count(*) filter (where ri.result in ('pass', 'fail'))::text
+              as reviews_answered
+          from config.qa_checklist_items i
+          left join reporting.qa_review_items ri on ri.item_key = i.key
+          left join reporting.qa_reviews q
+            on q.id = ri.review_id and q.completed_at is not null
+          where i.is_active and (ri.id is null or q.id is not null)
+          group by i.key, i.label, i.position
+          -- Worst first, and a check nobody has answered sorts last rather
+          -- than looking like a perfect record.
+          order by count(*) filter (where ri.result = 'fail') desc, i.position
+          limit ${Math.min(Math.max(limit, 1), 20)}
+        `;
+
+        return rows.map((row) => {
+          const answered = Number(row.reviews_answered);
+          const failures = Number(row.failures);
+          return {
+            itemKey: row.item_key,
+            label: row.label,
+            failures,
+            reviewsAnswered: answered,
+            failureRate: answered === 0 ? null : failures / answered,
+          };
+        });
+      });
+    },
+
     async reviews(reportId) {
       return tx(async (sql) => {
         const rows = await sql<ReviewRow[]>`

@@ -138,7 +138,8 @@ export function createActivityRepository(
           with directory as (${DIRECTORY(sql)}),
           filtered as (
             ${ACTIVITY_SELECT(sql)}
-            where a.case_id = ${filter.caseId}::uuid
+            where (${filter.caseId ?? null}::uuid is null or a.case_id = ${filter.caseId ?? null}::uuid)
+              and (${filter.recordedBy ?? null}::uuid is null or a.recorded_by = ${filter.recordedBy ?? null}::uuid)
               and (${filter.activityType ?? null}::text is null or a.activity_type = ${filter.activityType ?? null})
               and (${filter.from ?? null}::timestamptz is null or a.occurred_at >= ${filter.from ?? null}::timestamptz)
               and (${filter.to ?? null}::timestamptz is null or a.occurred_at <= ${filter.to ?? null}::timestamptz)

@@ -7,7 +7,7 @@ import {
   type FormState,
 } from "@/lib/forms";
 import { refreshPath } from "@/lib/revalidate";
-import { requireActorOrThrow, requirePermission } from "@/lib/auth/session";
+import { asActor, requireActorOrThrow, requirePermission } from "@/lib/auth/session";
 import {
   assertClosureReady,
   assertClosureReturnHasNotes,
@@ -28,7 +28,9 @@ import {
   qaResultFromItems,
   reporting,
 } from "@/modules/reporting";
+import { casework } from "@/modules/casework";
 import { isIamError } from "@/modules/iam";
+import { notifyReportMoved } from "@/features/notifications/producers";
 import {
   acknowledgeDeliverySchema,
   addSectionSchema,
@@ -205,12 +207,39 @@ export async function setReportStatus(
       assertSectionsCiteTheirSupport(sections);
     }
 
-    const after = await api.reports.transition({
-      id: reportRecordId,
-      to: status,
-      decision,
-      notes,
-      approveVersion: approving,
+    // The audience for a review is the case team: whoever reviews next is
+    // among them, and PRD 10.1 does not name a reviewer in advance. Read
+    // before the write opens, so the transaction carries nothing but the
+    // change and the notifications about it.
+    const audience =
+      status === "draft"
+        ? []
+        : (await casework(actor).cases.assignments(caseRecordId))
+            .filter((a) => a.unassignedAt === null)
+            .map((a) => a.userId);
+
+    const after = await asActor(actor, async (tx) => {
+      const moved = await reporting(actor, tx).reports.transition({
+        id: reportRecordId,
+        to: status,
+        decision,
+        notes,
+        approveVersion: approving,
+      });
+
+      await notifyReportMoved(actor, tx, {
+        report: {
+          id: moved.id,
+          reportId: moved.reportId,
+          caseId: moved.caseId,
+          caseReference: moved.caseReference,
+        },
+        status,
+        authorId: moved.author,
+        audience,
+      });
+
+      return moved;
     });
 
     staleReport(caseRecordId, reportRecordId);

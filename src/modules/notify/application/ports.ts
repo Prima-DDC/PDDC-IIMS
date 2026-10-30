@@ -42,8 +42,13 @@ export interface NotificationRepository {
    * back action notifies nobody and a committed one always does. That is the
    * whole reason the outbox exists, and it is why this takes a transaction
    * rather than opening its own.
+   *
+   * Null when there was nobody to tell: the recipient is the person who
+   * caused it, or they are no longer an active user. Not an exception,
+   * because the work this hangs off has already succeeded and refusing it
+   * afterwards would be the wrong failure in the wrong place.
    */
-  notify(input: NotifyInput): Promise<Notification>;
+  notify(input: NotifyInput): Promise<Notification | null>;
 
   /** Several at once, for an event with an audience rather than a recipient. */
   notifyAll(inputs: NotifyInput[]): Promise<Notification[]>;
@@ -86,6 +91,12 @@ export interface OutboxRepository {
     status: DeliveryStatus;
     providerId?: string | null;
     error?: string | null;
+    /**
+     * When to try again. Only a row going back into the queue carries one;
+     * for anything else the attempt time is left where the claim put it,
+     * because nothing is waiting for it.
+     */
+    retryAt?: string | null;
   }): Promise<void>;
 
   /** A status reported by the provider's webhook. */

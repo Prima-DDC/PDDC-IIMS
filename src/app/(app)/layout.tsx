@@ -2,10 +2,13 @@ import { AppLink } from "@/components/AppLink";
 import type { ReactNode } from "react";
 import { FolderLock } from "lucide-react";
 import { BottomNavBar } from "@/components/BottomNavBar";
+import { CommandPalette } from "@/components/CommandPalette";
 import { GlassTopBar } from "@/components/GlassTopBar";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { requireActor } from "@/lib/auth/session";
 import { buildNavigation } from "@/features/site-layout/navigation";
+import { NotificationBell } from "@/features/notifications/NotificationBell";
+import { getUnreadNotificationCount } from "@/features/notifications/queries";
 import { SideNav } from "@/features/site-layout/SideNav";
 import { UserMenu } from "@/features/site-layout/UserMenu";
 
@@ -21,7 +24,10 @@ import { UserMenu } from "@/features/site-layout/UserMenu";
  */
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const actor = await requireActor();
-  const nav = await buildNavigation(actor);
+  const [nav, unread] = await Promise.all([
+    buildNavigation(actor),
+    getUnreadNotificationCount(actor),
+  ]);
 
   return (
     <div className="min-h-dvh">
@@ -38,7 +44,19 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           </span>
         </AppLink>
 
-        <div className="ml-auto flex items-center gap-2.5">
+        <div className="ml-auto flex items-center gap-1.5 sm:gap-2.5">
+          {/*
+            Already filtered by this actor's effective permissions, so the
+            palette cannot offer a destination that would then refuse them.
+          */}
+          <CommandPalette
+            entries={nav.all.map((entry) => ({
+              href: entry.href,
+              label: entry.label,
+              icon: entry.icon,
+            }))}
+          />
+          <NotificationBell unread={unread} />
           <ThemeToggle />
           <UserMenu
             fullName={actor.fullName}

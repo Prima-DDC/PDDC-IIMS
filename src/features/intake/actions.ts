@@ -3,7 +3,8 @@
 import { refreshPath } from "@/lib/revalidate";
 import { redirect } from "next/navigation";
 import { EMPTY_FORM_STATE, invalidForm, type FormState } from "@/lib/forms";
-import { requireActorOrThrow, requirePermission } from "@/lib/auth/session";
+import { asActor, requireActorOrThrow, requirePermission } from "@/lib/auth/session";
+import { permissionHolders } from "@/lib/reference";
 import {
   assertConflictDecidable,
   assertDeclineReason,
@@ -14,6 +15,7 @@ import {
   screeningTerms,
 } from "@/modules/crm";
 import { isIamError } from "@/modules/iam";
+import { notifyConflictDetected } from "@/features/notifications/producers";
 import {
   assignEnquirySchema,
   createEnquirySchema,
@@ -202,12 +204,37 @@ export async function runCheck(
     });
     if (!parsed.success) return invalidForm(parsed.error);
 
-    const check = await crm(actor).intake.recordCheck({
-      enquiryId: parsed.data.enquiryId,
-      engagementId: parsed.data.engagementId,
-      clientId: parsed.data.clientId,
-      terms: parsed.data.terms,
-      threshold: parsed.data.threshold,
+    // PRD 8.3: a possible conflict is a MANAGER's decision, and until one is
+    // made the enquiry cannot become a case. Whoever can approve one is
+    // therefore the audience, read before the write so the transaction
+    // carries only the check and the notifications about it.
+    const managers = await permissionHolders(actor, "conflicts", "approve");
+
+    const check = await asActor(actor, async (tx) => {
+      const recorded = await crm(actor, tx).intake.recordCheck({
+        enquiryId: parsed.data.enquiryId,
+        engagementId: parsed.data.engagementId,
+        clientId: parsed.data.clientId,
+        terms: parsed.data.terms,
+        threshold: parsed.data.threshold,
+      });
+
+      // Only when there is something to decide. A clean check is the normal
+      // outcome and telling a manager about every one of those would teach
+      // them to ignore the ones that matter.
+      if (recorded.matchCount > 0) {
+        await notifyConflictDetected(actor, tx, {
+          checkId: recorded.id,
+          reference:
+            recorded.enquiryReference ??
+            recorded.clientName ??
+            recorded.checkId,
+          matchCount: recorded.matchCount,
+          audience: managers,
+        });
+      }
+
+      return recorded;
     });
 
     refreshPath("/intake/conflicts");

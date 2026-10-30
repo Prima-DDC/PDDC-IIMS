@@ -830,12 +830,146 @@ pretending to. The idempotency key is derived from the notification id, not
 from recipient and category, because the latter would have collapsed two
 genuine alerts about the same kind of event into one.
 
+### Publishing, and draining
+
+Migrations 0054 to 0058. Closing the tables properly in 0053 is what made
+these necessary, and neither problem should have been solved by widening a
+policy.
+
+**A producer cannot read the recipient's preferences**, because
+`preferences_select` is `user_id = iam.current_user_id()` and a producer is by
+definition not the recipient. Widening that would let anybody read
+everybody's choices. So `notify.publish` is a SECURITY DEFINER function: it
+reads the preference, writes the in-app row, reads the recipient's address
+from the shared directory and uses it without returning it, so an address
+never travels back into application memory to be logged by accident.
+
+**The worker cannot read the outbox**, which has an insert policy and nothing
+else, deliberately: it is a queue of email addresses and delivery state, and
+no page in the platform has business reading it. 0054 revoked `iims_app`'s
+SELECT and UPDATE on it as well. Nothing could be read through those grants,
+since row-level security is forced and there was no select policy, but they
+were a trap: the next person to add a policy for an admin delivery screen
+would have opened the whole queue without granting anything, and the grant is
+the part a reviewer looks at.
+
+**Claiming is a lease, not a status.** The status column holds what the
+provider has told us and nothing else, so there is no `sending` to park a row
+in. The claim pushes `next_attempt_at` five minutes out and counts the
+attempt, which means two workers cannot take the same row, a worker that dies
+mid-send does not strand it, and a message that kills the worker every time
+still runs out of attempts. Counting the attempt on a clean failure instead
+would have meant a poison message retried for ever.
+
+**Two of the five email parameters are filled by the database.**
+`categoryLabel` comes from `notify.categories` and `recipientName` from the
+staff directory (0056). PRD 12.1's catalogue is data so PDDC can relabel a
+category without a release, and that is worth nothing if a second copy of
+every label sits in TypeScript and shows the old wording in email while the
+screen shows the new. A producer passes only what is about the event: the
+case reference, the link and a due date.
+
+### The notifications nobody triggers
+
+Nobody clicks "my task is overdue"; the deadline passes. 0058 adds three
+scans, and the thing that makes them safe to run on a schedule is a
+`source_key`: the caller's own name for what is being notified about, unique
+per recipient and category. Publishing twice under one key does nothing the
+second time and returns null, so an hourly scan does not report the same
+overdue task twenty-four times a day. Choosing the key is the real decision
+in each one: an overdue task is keyed on the task, an approaching deadline on
+the task AND the date so a deadline that moves out and back warns again, and
+a missed check-in on the check-in that was missed.
+
+**PRD 5.8's missed check-in alert now exists**, which was listed as an
+outstanding gap through M3 to M6. A check-in is missed when the latest event
+for somebody on a case is a `check_in` whose `next_due_at` has passed; a
+`check_out` ends the obligation, which is what checking out means. It reaches
+the person who is out, everybody on the case in a supervisory role, and
+whoever holds `cases:assign`, which `iam.permission_holders` answers (0057).
+
+That audience is deliberately wide and worth stating plainly: measured
+against the live project with one late check-in planted, it told eight people.
+PRD 5.8 names the Operations Manager, who may not be assigned to the case, so
+the audience has to be a permission rather than an assignment, and in a firm
+of this size the people who can staff a case are the leadership. It is also a
+mandatory category, so none of those eight can switch it off. The judgement:
+a missed check-in should be rare, and too many people knowing is the safe
+direction for the one alert that might mean somebody is in trouble. If PDDC
+disagree it is one predicate.
+
+### The scheduler
+
+`pg_cron` bodies do nothing but `net.http_post` to a route handler, because a
+cron job runs as the role that scheduled it, `postgres`, which owns every
+table and bypasses its own policies. `/api/cron/notify` drains the outbox and
+`/api/cron/scan` runs the scans; both authenticate with `CRON_WORKER_SECRET`,
+compared in constant time. Underneath that, the queue and scan functions
+require a named system process AND no signed-in user, which is a structural
+guard rather than a password: nothing reachable from a request can touch the
+queue however it is called.
+
+**The schedules themselves are not registered yet**, because they would post
+to a URL that does not exist until the platform is deployed. The routes work
+and the scans are verified; wiring `cron.schedule` is a deployment step.
+
+### Screens
+
+The feed at `/notifications`, the preferences at
+`/notifications/preferences`, and the bell in the top bar. All server
+components with no client bundle: a notification list is read far more often
+than it is acted on, the only interaction is a form post, and nothing in this
+platform is cached, so every navigation re-renders the shell and the count is
+as fresh as the page it sits on. PRD 12.2's five-second in-app delivery is
+the realtime channel's job and is still to come; the bell is honest rather
+than approximate in the meantime.
+
+A preference that is switched off had nowhere to land, because the
+notification row is the durable record and the outbox references it. So 0054
+records the suppression on the row: the event happened and is on file, and
+the feed does not show it. Filtering the feed by today's preferences instead
+would have made history move, hiding what had already been shown and
+resurrecting it when the category was switched back on.
+
+The mandatory three render with no controls at all rather than disabled ones.
+A disabled checkbox invites somebody to look for the setting that would
+enable it; a sentence saying it cannot be switched off is the truth and takes
+the same room.
+
+### Producers
+
+`src/features/notifications/producers.ts`, one file for all of them, so they
+can be read as a set and compared with PRD 12.1 directly. Wired so far: a
+task assigned (on creation, on reassignment, and on an edit that moves the
+assignee, because that is an assignment whatever screen it was made from),
+somebody put on a case, a case changing stage, a report put forward or
+returned, and a possible conflict reaching whoever can decide one.
+
+Every producer takes the caller's transaction, which is the requirement
+rather than a convenience: PRD 12.2 asks that no email be sent for a
+rolled-back action, so the notification is written with the change that
+caused it. `asActor` is what makes that possible from a feature action.
+
+Not yet wired: evidence requiring review, an integrity failure, and a
+security alert. The first two wait on the verification worker raising them,
+and the third on the lockout path.
+
+### Tested against the real database
+
+`tests/integration/notifications.test.ts`, eighteen cases. What is worth
+proving there rather than in the domain tests is whether the rules are
+actually in force: that an email cannot be given case content at the
+constraint and not only at the function in front of it, that a producer who
+is not the recipient still honours their preferences, that a mandatory
+category ignores a preference saying no, that one source key twice produces
+one notification, and that the worker's claim, requeue and dead-letter path
+moves the row the way the backoff says. It found a defect that would have
+broken task creation outright: item 88 below.
+
 ### Still to come in this milestone
 
-The notification repository and the outbox worker, the in-app feed and the
-preferences screen, wiring the real producers, PRD 11's six role dashboards,
-global search, and the AI gateway with its router, quotas, redaction and
-grounded assistant.
+PRD 11's six role dashboards, global search, and the AI gateway with its
+router, quotas, redaction and grounded assistant.
 
 ---
 
@@ -1870,6 +2004,53 @@ by inspecting the live platform rather than by reading documentation:
     has now silently corrupted a file twice, so anything carrying a backslash
     gets written with an editor and read back.
 
+88. **A parameter was serialised twice, and it would have broken task
+    creation.** The repository passed the email parameters to
+    `notify.publish` as `JSON.stringify(input.email)`. postgres.js serialises
+    a value itself once it has settled on a json type, so a string that was
+    already JSON became JSON again, and what arrived was a jsonb ARRAY
+    containing a string. The outbox refused the row, because that strips to
+    itself rather than to `{}` under the constraint permitting five keys.
+
+    The cost was not a missing email. `publish` runs inside the business
+    action's transaction, by design, so the refusal rolled the action back:
+    creating a task, assigning somebody to a case or moving a report would
+    each have failed with "something went wrong", and the thing that actually
+    went wrong was the shape of a parameter three layers down. `sql.json` is
+    the fix and it is one word.
+
+    Invisible to the type checker, because `JSON.stringify` returns a
+    perfectly good string, and invisible to the unit tests, which never reach
+    a database. The integration test found it on its first run, which is the
+    argument for having written it.
+
+89. **The integration suite cannot test row-level security, and three
+    assertions pretended otherwise.** `postgres` on Supabase has
+    `rolbypassrls`, so forcing RLS on a table does nothing for that
+    connection. Tests asserting that a feed showed one person's notifications
+    and not another's, and that marking somebody else's as read was refused,
+    were therefore asserting something no policy was enforcing: they failed
+    by showing everything to everybody.
+
+    Two changes, and the second matters more than the test. Every read and
+    both updates in the notification repository now name the recipient
+    themselves, `recipient_id = iam.current_user_id()`, alongside the policy
+    that says the same thing. It looks redundant and is not: it states the
+    query's intent where a reader of the query can see it, it survives the
+    policy being widened later for some other purpose, and it is the only
+    version that is true for a connection that bypasses RLS. The same
+    reasoning retired the permission-catalogue test's earlier reliance on
+    connecting as `iims_app`.
+
+90. **A test that expected a refusal took the rest of the transaction with
+    it.** Postgres aborts a whole transaction on a failed statement, so
+    asserting one refusal and carrying on produced "current transaction is
+    aborted" for everything after it: a cascade of failures describing
+    nothing, and five of them hid the real defect above. Every expected
+    refusal now runs inside its own savepoint, which is the scope that can be
+    rolled back on its own. Worth writing down because the migration
+    validator had already learned this and the test suite had not.
+
 ---
 
 ## Performance, measured
@@ -1970,21 +2151,25 @@ Pro that the evidence store needs anyway.
 - **Chain anchoring is not yet scheduled.** `audit.chain_anchors` exists and
   `verify_chain` runs on the audit screen, but publishing the signed head to
   storage outside the project needs `pg_cron` (M7).
-- **A missed check-in does not alert anybody yet.** PRD 5.8 asks for an
-  immediate alert to the supervisor and the Operations Manager. The data it
-  has to be computed from is in place: every check-in carries the moment the
-  next one falls due, and the overdue scan is a query rather than a
-  reconstruction. Raising the alert needs the scheduler, which is M7. Until
-  then the screens say plainly that recording something is not the same as
-  raising the alarm, and the case page shows an overdue check-in to anybody
-  looking at it.
+- **A missed check-in now raises an alert, and the schedule to run it is not
+  registered yet.** `notify.scan_missed_check_ins` is written, granted and
+  verified against the live project, and `/api/cron/scan` calls it. What is
+  missing is the `cron.schedule` entry, which would post to a URL that does
+  not exist until the platform is deployed. So the alert works and nothing
+  runs it on its own. The screens still say plainly that recording something
+  is not the same as raising the alarm.
 - **Closure and lessons learned are M6, not M3.** `assessClosureReadiness`
   implements PRD 5.9's nine requirements and is unit tested, but three of them
   (report approved, evidence accounted for, delivery recorded) can only be
   answered by modules that do not exist yet, so the closure screen waits for
   them rather than asking somebody to attest to them by hand.
-- **`pg_cron` and `pg_net` are not enabled**, so the outbox, overdue scans and
-  integrity re-checks are not running yet (M7).
+- **`pg_cron` and `pg_net` are not enabled, and no job is scheduled.** The
+  work they would drive exists and is tested: `/api/cron/notify` drains the
+  email outbox and `/api/cron/scan` runs the overdue, deadline and
+  missed-check-in scans, both behind `CRON_WORKER_SECRET`. Registering the
+  schedules needs the deployed URL and the secret in Supabase Vault, so it is
+  a deployment step rather than a migration. Integrity re-checks and chain
+  anchoring still need their own routes.
 - **Conflict screening now searches the subject register as well** (migrations
   0038 and 0039, done in M5 as the M3 note said it would be). A check reads
   `crm.clients`, `intel.entities` and the entity aliases, keeps one row per

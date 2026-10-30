@@ -173,6 +173,26 @@ export interface ReportRepository {
 export interface QaRepository {
   checklist(): Promise<QaChecklistItem[]>;
 
+  /**
+   * Which checks fail most often (PRD 11, the QA dashboard).
+   *
+   * The one widget in PRD 11 that is a question about QA itself rather than
+   * about a report, and the only one worth acting on: a check that fails
+   * repeatedly is either a habit worth training out or a check worth
+   * rewording. Counted over completed reviews only, because an open review
+   * has answers that are still being changed.
+   */
+  commonFailures(limit?: number): Promise<
+    Array<{
+      itemKey: string;
+      label: string;
+      failures: number;
+      reviewsAnswered: number;
+      /** Null rather than zero when the check has never been answered. */
+      failureRate: number | null;
+    }>
+  >;
+
   reviews(reportId: string): Promise<QaReview[]>;
   findReview(reviewId: string): Promise<QaReview | null>;
 

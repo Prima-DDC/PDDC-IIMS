@@ -2,7 +2,7 @@
 
 import { refreshPath } from "@/lib/revalidate";
 import { EMPTY_FORM_STATE, invalidForm, type FormState } from "@/lib/forms";
-import { requireActorOrThrow, requirePermission } from "@/lib/auth/session";
+import { asActor, requireActorOrThrow, requirePermission } from "@/lib/auth/session";
 import {
   assertCorrectionIsUsable,
   assertNoPlanVersionInFlight,
@@ -17,6 +17,7 @@ import {
   isCaseworkError,
 } from "@/modules/casework";
 import { isIamError } from "@/modules/iam";
+import { notifyTaskAssigned } from "@/features/notifications/producers";
 import {
   correctActivitySchema,
   createPlanVersionSchema,
@@ -86,7 +87,18 @@ export async function createTask(
     assertTaskDates(parsed.data.startDate, parsed.data.dueDate);
 
     const { caseRecordId, ...input } = parsed.data;
-    const task = await casework(actor).tasks.create({ caseId: caseRecordId, ...input });
+
+    // The task and the notification about it are written together (PRD
+    // 12.2), so a creation that fails tells nobody and one that succeeds
+    // always does.
+    const task = await asActor(actor, async (tx) => {
+      const created = await casework(actor, tx).tasks.create({
+        caseId: caseRecordId,
+        ...input,
+      });
+      await notifyTaskAssigned(actor, tx, created);
+      return created;
+    });
 
     revalidateTask(caseRecordId);
     return { ...EMPTY_FORM_STATE, success: `${task.taskId} created.` };
@@ -120,7 +132,14 @@ export async function updateTask(
       assertNoTaskCycle(taskId, input.parentTaskId, [input.parentTaskId, ...ancestors]);
     }
 
-    await api.tasks.update(taskId, input);
+    await asActor(actor, async (tx) => {
+      const updated = await casework(actor, tx).tasks.update(taskId, input);
+      // An edit that moves the assignee is an assignment, whatever screen it
+      // was made from, and the person who now owns the work has to be told.
+      if (updated.assignedTo && updated.assignedTo !== existing.assignedTo) {
+        await notifyTaskAssigned(actor, tx, updated);
+      }
+    });
 
     revalidateTask(existing.caseId, taskId);
     return { ...EMPTY_FORM_STATE, success: "Saved." };
@@ -184,7 +203,19 @@ export async function reassignTask(
       return { ...EMPTY_FORM_STATE, error: "That task no longer exists." };
     }
 
-    const updated = await api.tasks.reassign(taskId, assignedTo, reason);
+    const updated = await asActor(actor, async (tx) => {
+      const result = await casework(actor, tx).tasks.reassign(
+        taskId,
+        assignedTo,
+        reason,
+      );
+      // Only when it moved. Reassigning a task to the person who already has
+      // it is a no-op to them, and a notification saying so is noise.
+      if (result.assignedTo && result.assignedTo !== task.assignedTo) {
+        await notifyTaskAssigned(actor, tx, result);
+      }
+      return result;
+    });
 
     revalidateTask(task.caseId, taskId);
     return {
