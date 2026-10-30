@@ -203,6 +203,19 @@ export default defineConfig({
       },
     },
 
+    // Accessibility, as the administrator because that session reaches every
+    // screen in the list: a check that skipped a page for want of permission
+    // would report a floor it had not actually tested.
+    {
+      name: "a11y",
+      testMatch: /accessibility\.spec\.ts/,
+      dependencies: ["setup"],
+      use: {
+        ...devices["Desktop Chrome"],
+        storageState: "playwright/.auth/admin.json",
+      },
+    },
+
     // The bottom navigation bar only exists below the md breakpoint, so it
     // needs a real phone viewport to test at all.
     {
