@@ -1370,6 +1370,138 @@ back a consistent chain as of the backup, and `audit.audit_log` is never
 restored row by row, because a gap in the trail recorded as a gap is
 truthful and a reconstructed one is not.
 
+### PRD 16's matrix, transcribed as a test
+
+`tests/integration/permission-matrix.test.ts`. PRD 20.2 asks for automated
+tests that prove each role and classification combination in Section 16, and
+the direction this runs in is the whole value: the EXPECTATION is PRD 16 typed
+out cell by cell, and the database is what gets compared against it. Written
+the other way round, reading the grants and asserting they are what they are,
+it would pass for ever.
+
+It found three grants wider than the document and two ceilings that
+contradict one of its hard rules, all corrected by migration 0062:
+
+| What | PRD 16 says |
+| --- | --- |
+| `analyst cases:edit` | "V (assigned)". An analyst does the work on a case, which is why they hold `V C E` on tasks, entities, sources, information and findings; editing the case record is its title, scope, dates and risk rating. |
+| `supervisor cases:create` | `V E A`. Opening a case follows engagement approval (PRD 4.1) and belongs to the Operations Manager. |
+| `operations_manager findings:approve` | `V`. Approving a finding is a judgement about analysis, and the matrix gives the `A` to the Supervisor. |
+| `findings:approve` and `entities:merge`, scope all, ceiling STRICTLY_RESTRICTED | "STRICTLY RESTRICTED items require named-user grants for every role except Administrator". Both were granted to an ordinary role, so a supervisor could approve or merge strictly-restricted material by role alone. Lowered to RESTRICTED, which still outranks CONFIDENTIAL, so nothing a supervisor does today changes. |
+
+Three of the test's own failures were the transcription being wrong rather
+than the seed, and each is now documented in the test itself:
+
+**"CEO/Admin" is one column covering two roles**, and the seed splits them
+deliberately. The `ceo` role is the executive: it views everything and
+approves reports. The `administrator` role is the platform administrator, and
+user administration, client creation and conflict screening sit there rather
+than with the chief executive, which is a better division than one column can
+express. PRD 3.5 and 20.2 require the Administrator to reach every resource
+including ones added later, which is why that role holds `('*','*')` rather
+than a list, and the wildcard is what satisfies those cells.
+
+**PRD 16's legend has eight letters and the catalogue has actions it cannot
+express**: `export`, `assign`, `close`, `archive`, `merge` and `configure`. A
+cell cannot say any of them, so the matrix cannot be their authority, and each
+is asserted where it belongs instead.
+
+**A client is onboarded, not approved.** The matrix groups clients and
+engagements into one row and gives `A` to both, and the catalogue has no
+`clients:approve` because only one of the two is ever approved.
+
+### Performance (PRD 20.2)
+
+`tests/integration/performance.test.ts`. Two of PRD 20.2's three budgets
+cannot be measured from here, and saying why is more useful than a test that
+pretends otherwise.
+
+The p95 and the page paint are dominated by the database being in another
+region: the round trip alone is ~127ms, so a page making eighteen of them
+cannot come in under 300ms however well written. And the 100,000-record search
+cannot be timed against this project at all, because it is the live Supabase
+project that also serves primaddc.com on a free tier with 500MB shared between
+them; seeding 100,000 cases into it for a number would risk the website's
+storage. That measurement belongs against a separate project and is a
+deployment task.
+
+So what is asserted is the thing that decides the answer before any seeding:
+whether the planner can reach each search through its index. An index scan at
+2,000 rows is an index scan at 200,000; a sequential scan is fast today and
+quadratic later, which is the regression that passes a timing test on a small
+database and fails in production a year in. Eight searches, one per index,
+written with the operators the repositories actually use, with
+`enable_seqscan` off for the duration so the planner's correct preference for
+scanning a tiny table does not hide the answer. Plus the other direction:
+every table global search reads has a trigram or full-text index, so a table
+added to search without one cannot pass by being absent from the list.
+
+The latency numbers are reported in two columns, and the first version of this
+test is why. It reported the round trip alone and made the task list look like
+a 975ms problem; the same query's server time is 0.06ms, and a repeat run of
+the identical test said 216ms. The whole of it was variance in getting there
+and back, and that measurement would have sent somebody optimising a query
+that takes sixty microseconds.
+
+```
+251ms round trip      0.20ms in the database   the case list, as the screen pages it
+272ms round trip      0.09ms in the database   one case by id
+674ms round trip      0.07ms in the database   the task list
+238ms round trip      0.05ms in the database   the audit trail's newest page
+```
+
+The database side IS asserted, at a generous 50ms, because that is the half
+the code controls and where a real query problem would show.
+
+### Accessibility
+
+`tests/e2e/accessibility.spec.ts`, as its own Playwright project. Hand-written
+rather than axe, and the file says why: `@axe-core/playwright` would cover far
+more ground and would be the right thing to add, but it would not say anything
+specific about the handful of failures that actually make a platform of dense
+forms unusable. Those are the ones asserted, on real screens as a real
+signed-in user:
+
+- one first-level heading per page, and it says where you are;
+- every control has an accessible name, read from the same four sources a
+  screen reader reads in the same order. A control without one is announced as
+  "edit text, blank", which on a platform that is mostly forms is the most
+  consequential rule there is;
+- focus draws something visible, which catches `outline: none` applied for
+  looks. Tailwind rings count, because they are drawn with `box-shadow`;
+- every table column has a header and every header has text;
+- the document language is declared;
+- no badge relies on colour alone, which PRD 23's risk scale is the most
+  tempting place to get wrong.
+
+Stated in the file so nobody mistakes it for an audit: it is a floor that
+cannot regress silently, not a WCAG 2.2 AA assessment. **An independent audit
+and the keyboard-only pass a person has to do are both still outstanding.**
+
+### The scheduler, as a deployment step
+
+`npm run schedule:jobs`, and `-- --list` to see what is registered. It is a
+script rather than a migration because it needs the one thing a migration
+cannot have: the URL the platform is actually deployed at. Hard-coding a guess
+would schedule four jobs posting into nowhere and fill
+`cron.job_run_details` with failures that look like broken workers.
+
+Verified as far as it can be without a deployment: `pg_cron` 1.6.4 and
+`pg_net` 0.20.3 are available on this project and not installed,
+`supabase_vault` 0.3.1 is installed, and `--list` reports all of that
+correctly. The scheduling path refuses to run without
+`CRON_ALLOW_SCHEDULE=1` and an https URL.
+
+Four jobs: the outbox every minute, the overdue and safety scans every fifteen
+minutes, the AI queue every five, and a nightly prune. The prune is not
+optional: `cron.job_run_details` is never pruned by pg_cron and an unpruned
+copy of it has blocked Postgres upgrades before.
+
+Every job body does nothing but `net.http_post` to a route handler, and reads
+the shared secret from Vault at run time rather than carrying it, because
+`cron.job` is readable by anybody who can read that catalogue and a secret in
+a job body is a secret in a catalogue.
+
 ---
 
 ## Bugs and design changes found during the build
@@ -2535,6 +2667,30 @@ by inspecting the live platform rather than by reading documentation:
     row-level security, and a fixture whose roles do not matter is a fixture
     that will mislead somebody later.
 
+97. **A full end-to-end run tested the wrong code, and the failure named a
+    login form.** `playwright.config.ts` sets `reuseExistingServer` outside
+    CI, which is the right default: a forty-minute suite should not restart
+    the server eight times. The consequence is that a server started before a
+    rebuild keeps serving while `.next` is replaced underneath it, and what
+    comes out is neither the old build nor the new one. Pages arrived with
+    their HTML intact and their scripts missing, so the suite failed on
+    `fill()` timing out against a form that was plainly there in the markup.
+
+    It took a while to see because every signal pointed at the application: a
+    login page, a form, a timeout. What settled it was one `curl` against the
+    running server showing no `Content-Security-Policy` header, which the
+    current proxy sets on every response: the server was older than the proxy.
+
+    Global setup now makes that same request and refuses the run, with the
+    reason. The check is a proxy for "is this the current build" rather than a
+    proof of one, and the comment says so, including what to replace it with
+    if the CSP ever goes.
+
+    Worth recording as a class of problem rather than an incident: a test
+    suite that can silently exercise a different version of the thing it
+    tests will eventually report a result about nothing, and the report will
+    be confident.
+
 ---
 
 ## Performance, measured
@@ -2648,12 +2804,21 @@ Pro that the evidence store needs anyway.
   answered by modules that do not exist yet, so the closure screen waits for
   them rather than asking somebody to attest to them by hand.
 - **`pg_cron` and `pg_net` are not enabled, and no job is scheduled.** The
-  work they would drive exists and is tested: `/api/cron/notify` drains the
-  email outbox and `/api/cron/scan` runs the overdue, deadline and
-  missed-check-in scans, both behind `CRON_WORKER_SECRET`. Registering the
-  schedules needs the deployed URL and the secret in Supabase Vault, so it is
-  a deployment step rather than a migration. Integrity re-checks and chain
-  anchoring still need their own routes.
+  work exists and is tested, the routes are written, and
+  `npm run schedule:jobs` registers all four of them. What it needs is the
+  deployed URL, which is why it is a script rather than a migration:
+  `pg_cron` 1.6.4 and `pg_net` 0.20.3 are available on this project and not
+  installed, and `npm run schedule:jobs -- --list` reports that without
+  changing anything. Integrity re-verification and chain anchoring still need
+  their own routes before they can be scheduled alongside the others.
+- **An independent accessibility audit is outstanding.**
+  `tests/e2e/accessibility.spec.ts` is a floor that cannot regress silently,
+  not a WCAG 2.2 AA assessment, and the keyboard-only pass over the case page
+  and the report builder is something a person has to do.
+- **The 100,000-record search figure is unmeasured.** PRD 20.2 asks for under
+  a second, and the index work that decides it is asserted; the number itself
+  needs a separate Supabase project, because seeding 100,000 cases into the
+  one that serves primaddc.com would risk the website's own storage.
 - **Conflict screening now searches the subject register as well** (migrations
   0038 and 0039, done in M5 as the M3 note said it would be). A check reads
   `crm.clients`, `intel.entities` and the entity aliases, keeps one row per
