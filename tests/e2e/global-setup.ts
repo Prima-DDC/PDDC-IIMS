@@ -50,8 +50,63 @@ function loadEnv(file: string) {
   }
 }
 
+/**
+ * Refuses to run against a server that predates the current code.
+ *
+ * `reuseExistingServer` is on outside CI, which is the right default: a
+ * forty-minute suite should not restart the server eight times. The cost is
+ * the failure this exists to catch. A server started before a rebuild keeps
+ * serving while `.next` is replaced underneath it, and what comes out is
+ * neither the old build nor the new one: pages render without their scripts,
+ * and the suite fails on `fill()` timing out against a form that is there in
+ * the HTML.
+ *
+ * That cost a full run of this suite, and the failure named a login form
+ * rather than a stale server, which is why it took so long to see. So the
+ * check is one request: every response from this application carries a
+ * `Content-Security-Policy` built in the proxy, and a server without that
+ * header is older than the proxy that sets it.
+ *
+ * It is a proxy for "is this the current build" rather than a proof of one,
+ * and that is the honest description. If the CSP is ever removed, this check
+ * goes with it, and whoever removes it should replace it with whatever the
+ * current equivalent is: a cheap request that only the current server can
+ * answer correctly.
+ */
+async function refuseAStaleServer(baseUrl: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/login`, { redirect: "manual" });
+  } catch {
+    // Nothing is listening yet, which is the normal case: Playwright starts
+    // the server after global setup.
+    return;
+  }
+
+  if (response.headers.get("content-security-policy")) return;
+
+  throw new Error(
+    [
+      `The server already running at ${baseUrl} is not serving the current`,
+      "code: its responses carry no Content-Security-Policy, and the proxy in",
+      "this build sets one on every request.",
+      "",
+      "It is almost certainly a server started before a rebuild, which keeps",
+      "serving while .next is replaced underneath it. The suite would fail",
+      "with timeouts that name forms rather than the cause.",
+      "",
+      "Stop it and run again. Playwright will start a fresh one.",
+    ].join("\n"),
+  );
+}
+
 export default async function globalSetup() {
   loadEnv(".env.local");
+
+  await refuseAStaleServer(
+    process.env.E2E_BASE_URL ??
+      `http://127.0.0.1:${process.env.E2E_PORT ?? 3100}`,
+  );
 
   const connectionString = process.env.SUPABASE_DB_URL;
   if (!connectionString) {
