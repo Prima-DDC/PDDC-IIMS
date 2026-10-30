@@ -1,6 +1,8 @@
 import { AppLink } from "@/components/AppLink";
 import type { Metadata } from "next";
 import { Suspense } from "react";
+import { getCaseAssistant } from "@/features/ai/queries";
+import { CaseAssistant } from "@/features/ai/AiViews";
 import { forbidden, notFound } from "next/navigation";
 import {
   Card,
@@ -71,6 +73,7 @@ const TABS = [
   "comms",
   "safety",
   "finance",
+  "assistant",
 ] as const;
 
 type TabKey = (typeof TABS)[number];
@@ -336,6 +339,12 @@ export default async function CasePage({
         </Suspense>
       )}
 
+      {tab === "assistant" && (
+        <Suspense fallback={<TableSkeleton rows={3} />}>
+          <CaseAssistantTab caseRecordId={record.id} />
+        </Suspense>
+      )}
+
       {tab === "tasks" && (
         <Suspense fallback={<TableSkeleton rows={4} />}>
           <CaseTasksTab caseRecordId={record.id} />
@@ -446,6 +455,20 @@ export default async function CasePage({
 }
 
 /**
+ * The assistant (PRD 22).
+ *
+ * Its own tab rather than a panel on the summary, for a reason PRD 22.3
+ * cares about: an AI suggestion must be visually distinct and must not sit
+ * where somebody skims for facts about the case. Behind a tab, nobody
+ * encounters a model's sentence while reading the record.
+ */
+async function CaseAssistantTab({ caseRecordId }: { caseRecordId: string }) {
+  const view = await getCaseAssistant(caseRecordId);
+  if (!view.mayView) return null;
+  return <CaseAssistant caseRecordId={caseRecordId} view={view} />;
+}
+
+/**
  * The tab bar, with what sits behind each tab.
  *
  * Streamed separately from the case: the counts are three more queries, and a
@@ -532,6 +555,9 @@ async function Tabs({
     { key: "comms", label: "Communications" },
     { key: "safety", label: "Safety" },
     { key: "finance", label: "Finance" },
+    // Last, and with no badge. PRD 22's Amendment 12 makes AI assistive, and
+    // a count on this tab would put it in the same visual class as the work.
+    { key: "assistant", label: "Assistant" },
   ];
 
   return <CaseTabs tabs={tabs} active={active} />;

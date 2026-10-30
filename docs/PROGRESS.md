@@ -29,7 +29,7 @@ node --env-file=.env.local scripts/check-coexistence.mjs     # website untouched
 | M4 | Documents, evidence and chain of custody | Done, verified |
 | M5 | Intelligence: entities, sources, information, findings | Done, verified |
 | M6 | Reporting, QA, closure, archive, management reports | Done, verified end to end |
-| M7 | Notifications, dashboards, AI gateway | Notification foundation done, rest in progress |
+| M7 | Notifications, dashboards, AI gateway | Done, verified |
 | M8 | Hardening and the PRD 20.1 acceptance demo | Not started |
 
 Sections not yet built render an honest placeholder naming their milestone and
@@ -966,10 +966,242 @@ one notification, and that the worker's claim, requeue and dead-letter path
 moves the row the way the backoff says. It found a defect that would have
 broken task creation outright: item 88 below.
 
+### Dashboards (PRD 11)
+
+One page, six groups of widgets, each gated on the permission that defines
+the role PRD 11 wrote it for: Personal for everybody, Operations on
+`cases:assign`, Team on `plans:approve`, QA on `qa:view`, Management on
+`users:view`, Finance on `financials:edit`.
+
+PRD 11 names six dashboards and PRD 16's last row maps each role to one,
+which reads like six routes. It should not be, and the reason is the
+configurable matrix. A role is data: an administrator can rename "Operations
+Manager", add a role, or move any cell through the Permission Builder, so a
+layout chosen by role name breaks the first time somebody does, and breaks
+silently. A layout chosen by permission cannot, because it asks the question
+the data layer asks. And a person can hold several roles, whose permissions
+PRD 3.2 unions, so their dashboard should union too: a supervisor who also
+runs operations needs both sets, and six exclusive routes force a choice the
+permission model does not make.
+
+Every figure comes from the same endpoint as the screen it links to, with
+`limit: 1` where only the total is wanted. That is what makes PRD 11's "shows
+only data the viewer is authorised to see" true by construction rather than by
+review: an investigator's "active cases" is the count of cases they are
+assigned to, because that is all the query can see. It also means a number on
+the dashboard and the list behind it cannot disagree, which a second piece of
+arithmetic would eventually have caused.
+
+Two small read models were added because PRD 11 names widgets nothing could
+answer: the activity list's `caseId` became optional with a `recordedBy`
+filter, for the investigator's "My Activities", and `qa.commonFailures`
+counts which of PRD 10.3's twelve checks fail most often over completed
+reviews, excluding not-applicable answers from the denominator so the ones
+that do apply are not understated.
+
+### Global search (PRD screen 4)
+
+Global search asks each module the question that module already answers,
+eleven searches in parallel, each behind its own permission gate.
+
+The obvious implementation is one index over everything, and it is the wrong
+one here. Every record is reachable only through row-level security, case
+assignment and a classification ceiling, and those differ per resource: an
+investigator reads the cases they are assigned to, evidence within their
+clearance, and no client record at all. A single index would reimplement all
+of that in its own filter, and the day it drifted it would leak the one thing
+this platform exists to protect, which is the existence of a case, a subject
+or a source. Composing the real searches is more round trips and makes
+"permission-filtered inside the query" (PRD 21.5) true by construction.
+
+The gate in front of each search is not redundant either. Without it,
+somebody with no `clients:view` would run a client search that correctly
+returned nothing, and the empty "Clients" heading would still tell them the
+resource exists and that they matched nothing in it.
+
+Ctrl+K opens a command palette whose destinations come from the same
+permission-filtered navigation the sidebar uses, so it cannot offer somewhere
+that would then refuse them. Filtering is over those destinations only;
+records are found by searching, which is eleven queries and belongs behind
+Enter rather than behind every keystroke.
+
+---
+
+## M7 continued: the AI gateway
+
+PRD 22, and the whole of it is written so that Amendment 12 is literally
+true rather than aspirational. The provider allow-list ships EMPTY, every
+case has AI off, and with no provider enabled every path refuses with a
+sentence a person can read. Nothing else in the platform behaves differently.
+
+### Four things make cloud AI defensible, and all four are in the database
+
+Migration 0059 creates six tables in `config`, which 0001 designated for AI,
+rather than an eleventh schema for a subsystem that is off by default.
+
+**A provider has to be allow-listed, with its terms read.**
+`config.ai_providers` holds a base URL, a model and the NAME of the
+environment variable carrying the key, never the key, so no credential sits
+in a table a backup copies. A CHECK refuses `is_enabled` without
+`retention_terms` and `terms_reviewed_at`, which is PRD 22.4's condition for
+using a free provider at all: free tiers usually carry no data-processing
+agreement, and their terms may permit prompts to be logged or trained on. The
+review date moves only when the terms themselves change, because dating a
+label correction as a fresh reading would be a false record.
+
+**A case has to be opted in.** `config.ai_case_settings` has no row until
+somebody decides, and a reason is required in both directions: enabling is a
+decision to send material about this case to a third party, and disabling is
+one somebody may later need to explain. `ai:approve` is granted to the
+Supervisor, Operations Manager and COO, which is who PRD 22.4 names.
+
+**Only PUBLIC and INTERNAL may leave**, written as an allow-list of two
+rather than a block-list of three. The block-list is the same thing today and
+the wrong shape tomorrow: a sixth classification added to the catalogue would
+be sendable by default, which is backwards for a list whose members are added
+when something more sensitive turns up. The gate exists twice on purpose:
+`gateByClassification` splits passages into sendable and withheld while a
+request is being assembled, and `assertNothingAboveInternal` throws on the
+assembled result. The first is forgiving and can be got wrong by a caller
+that ignores its second return value; the second cannot, because there is
+nothing to ignore.
+
+**The redaction map never leaves, and the application cannot read it.**
+`iims_app` holds no privilege on `config.ai_redactions` at all, so a policy
+added later would have nothing to act on. The only way back is
+`config.ai_restore(job)`, for the job's own requester or the worker.
+
+### Redaction, and what it does not claim
+
+Two mechanisms. Known names are substituted by LOOKUP, from the case's own
+subject register including every alias, which is far better than any pattern:
+the platform knows exactly who is on the case, and PRD 8.3's conflict
+screening exists precisely because people appear under more than one name.
+Patterns catch what the register does not hold, which is identifiers, account
+numbers, telephone numbers and email addresses appearing inside the text of a
+statement.
+
+Longest name first, so substituting "ABC Holdings" cannot leave "Ghana
+Limited" in the clear after "ABC Holdings Ghana Limited" was meant to go. One
+token per distinct original across the whole request, so two passages about
+one person do not read as two people, which is most of what makes a redacted
+passage usable at all.
+
+Stated plainly because it would be easy to oversell: this is not
+anonymisation. A passage can identify somebody by circumstance with every
+name removed. PRD 22.4's real protection is the classification gate, which
+keeps confidential material inside the platform entirely; redaction reduces
+what an INTERNAL passage discloses and does not make disclosure safe.
+
+### Grounding, which is the rule an evidentiary platform cannot bend
+
+PRD 22.3 says unsupported statements are not shown, and that is a rule about
+what reaches the screen rather than about what the model was asked for. Every
+statement must cite a reference, and `keepOnlyGrounded` discards any that
+cites nothing. It also discards any citing a reference that was never sent: a
+model inventing "F-007" has invented a finding, and that is the single most
+dangerous output possible here, because it would look exactly like a
+traceable statement.
+
+Discarded statements are kept on the job and in the audit trail rather than
+thrown away, and the screen says how many there were. An answer where
+everything was discarded shows as "nothing it could support", which is the
+honest reading.
+
+Accepting a suggestion does NOT create a finding. It records that a named
+person judged it sound, with the model version, which is what PRD 22.3 asks
+to be audited. Writing the finding is a separate act on the findings screen,
+because a suggestion that became a finding by being approved would be a
+conclusion the platform drew. A second decision on the same suggestion is
+refused: PRD 22.3 wants the decision that was made on the record.
+
+### The router
+
+Providers are tried in the order an administrator put them in, skipping any
+whose breaker is open, until one answers. One adapter serves all of them
+because Groq, Cerebras, OpenRouter, Cloudflare and Mistral all speak OpenAI's
+chat-completions shape, which is why the allow-list stores a URL and a model
+rather than a provider type: adding one is a row, and PRD 22.4's local-model
+path is the same row with a different URL.
+
+A 429 or a 5xx moves to the next provider. A 400 stops: the request was
+malformed, and sending the same malformed request to three more providers
+would produce three more identical refusals and spend three more requests
+from an allowance shared across PDDC. Temperature is zero, because two people
+asking the same question of the same passages should get the same answer.
+
+The breaker backs off 1, 4 and 16 minutes, then an hour. The first version
+clamped the index into the step table rather than the decision, so a fourth
+failure resolved to sixteen minutes and a provider whose daily allowance had
+gone was retried every sixteen minutes for the rest of the day. The unit test
+caught it.
+
+### The queue, and why nothing is sent inline
+
+Every AI call is a job, including interactive ones, for three reasons that
+are all PRD 22.1: a per-user and per-case quota needs something to count, a
+free tier needs requests spread rather than bunched, and a summary that takes
+forty seconds must not be a page load. Fifty requests per person per day and
+eighty per case, against the roughly 200/day the free tiers in PRD 22.1 add
+up to conservatively. A blocked request does not count, because it spent no
+provider allowance.
+
+**The prompt is rebuilt, never stored.** A table of prompts would be a second
+copy of everything the platform was about to disclose, sitting outside the
+records those passages belong to. Rebuilding costs a retrieval and re-applies
+the gate against the case AS IT IS NOW, so an exhibit reclassified upward
+between the question and the send is refused. A stored prompt could not have
+noticed.
+
+**The worker has no user, and that took a correction.** The first version
+gave it an administrator's identity so it could read the allow-list, which
+was wrong twice: it would have attributed the work to somebody who did not do
+it, in the one record that has to be true, and it would have given the worker
+more reach than the person whose question it was running. Migration 0060
+admits a named system process with no user id to the allow-list instead.
+Retrieval, which is the part that MUST be permission-correct, runs separately
+as the asker: the assistant can never ground an answer in a record its user
+could not open, because it reads through the same repositories the screens
+do.
+
+### Retrieval is the platform's own search, not a vector index
+
+The question's words go through the same `search` filters the screens use.
+Less clever than embeddings and it buys two properties embeddings would cost:
+nothing has to be sent to a provider to compute it, and every passage
+returned is one the user could have found themselves. Findings first, because
+a finding is the firm's own conclusion; then information, then evidence and
+document DESCRIPTIONS. The files never leave, which PRD 22.4 requires in as
+many words.
+
+### Tested
+
+`src/modules/ai/domain/policies.test.ts`, thirty-eight cases, and it gets
+more attention than any other domain test here because it is the only layer
+whose failure sends PDDC's material to a third party. Everything else goes
+wrong inside a system that still has permissions; a prompt does not come
+back.
+
+`tests/integration/ai-gateway.test.ts`, fourteen cases against the live
+database: that the allow-list is empty, that a provider cannot be enabled
+without its terms, that a case with no row is off, that a blocked request is
+on the record and costs no quota, that the redaction map is beyond the
+application role's reach as a PRIVILEGE and not merely a missing policy, that
+`ai_restore` serves only the job's own requester, and that a second human
+decision is refused.
+
+One of those tests had to be rewritten rather than fixed: it queued a job on
+a case nobody had opted in and expected the insert policy to refuse. It did
+not, because `postgres` holds `rolbypassrls`. The rule is now asserted on
+`config.ai_available_for_case`, which answers the same way whoever calls it,
+with a structural assertion that the policy still consults it.
+
 ### Still to come in this milestone
 
-PRD 11's six role dashboards, global search, and the AI gateway with its
-router, quotas, redaction and grounded assistant.
+Nothing. The AI permitted uses beyond the grounded assistant (document
+summarisation, entity extraction, duplicate suggestion, timeline and
+relationship suggestions, report checking) are the same gateway with
+different prompts, and the kinds are already in the job table's CHECK.
 
 ---
 
@@ -2051,6 +2283,41 @@ by inspecting the live platform rather than by reading documentation:
     rolled back on its own. Worth writing down because the migration
     validator had already learned this and the test suite had not.
 
+91. **The circuit breaker never reached its cap.** `breakerDelayMs` clamped
+    the INDEX into its step table rather than the decision, so a fourth
+    consecutive failure resolved to the last step instead of to the hour: a
+    provider whose daily free allowance had gone would have been retried
+    every sixteen minutes for the rest of the day, spending nothing but
+    429s. Found by the unit test that asserted the documented sequence, which
+    is the argument for asserting documented numbers rather than whatever the
+    code returns.
+
+92. **The AI worker was given an administrator's identity, and should never
+    have had one.** It needed to read the provider allow-list, whose select
+    policy requires `ai:view` or `ai:configure`, and the quickest way to
+    satisfy that was to resolve some administrator and act as them. That is
+    wrong in two separate ways. Work attributed to a person who did not do it
+    corrupts the audit trail, which is the one record in this platform that
+    has to be true; and an actor with an administrator's permissions would
+    have had more reach than the person whose question it was running, which
+    is exactly what PRD 22.3's grounding rule exists to prevent.
+
+    Migration 0060 admits a named system process with no user id to the
+    allow-list instead, and tightened two other AI policies that accepted a
+    system process without also requiring the absence of a user. Retrieval
+    stays as the asker, which is the only part that has to be
+    permission-correct.
+
+93. **A fixture's name was silently blank, because the website had already
+    created the row.** The AI test seeded `public.profiles` with
+    `on conflict (id) do update set email = excluded.email`, and
+    primaddc.com's own `handle_new_user()` trigger creates that row the
+    instant `auth.users` is inserted, with no name. So the upsert always hit
+    the conflict and never set `full_name`, and every assertion about a name
+    read null. Worth recording because it is a hazard of a shared database
+    rather than a mistake in the test: a trigger in the other application
+    runs inside this one's transactions.
+
 ---
 
 ## Performance, measured
@@ -2209,6 +2476,15 @@ Pro that the evidence store needs anyway.
   for `noreply@primaddc.com` on `server.aveshost.net`, the same relay this
   Supabase project already authenticates with. In-app notifications do not
   depend on it: they are written in the business transaction.
+- **PDDC Open Question 4 is now a decision they can take, not a blocker.**
+  PRD 24 asks which free AI providers are acceptable and whether any case data
+  may be sent to them. The platform's answer until they say otherwise is the
+  strictest reading: no provider at all, because the allow-list is empty, and
+  nothing above INTERNAL ever, because the gateway refuses it. Enabling AI is
+  two deliberate acts, each recorded: an administrator enters a provider and
+  what its retention terms say, and a supervisor turns it on for a case with
+  a reason. Nothing needs to change in the code for PDDC to answer this one
+  way or the other.
 - **Credentials pasted into chat** (service-role key, database password) should
   be rotated.
 - **End-to-end fixtures are real accounts** in the shared project, named

@@ -494,3 +494,77 @@ export function actorContext(actor: Actor) {
     userAgent: actor.userAgent,
   };
 }
+
+/**
+ * An actor for background work, built from a user id rather than a session.
+ *
+ * WHY THIS EXISTS AND WHY IT IS NARROW. The AI queue has to retrieve case
+ * material under the permissions of the person who asked the question,
+ * because grounding an answer in a record its asker cannot open would defeat
+ * PRD 22.3 entirely. The worker has no HTTP request, no cookie and no
+ * session, so `getSession` cannot help it.
+ *
+ * What is deliberately NOT skipped: the account checks. A job queued by
+ * somebody who has since been suspended, locked or had their IIMS access
+ * removed does not run, because `iam.resolve_actor` returns their current
+ * state and this refuses anything but an active one. Permissions are read
+ * fresh too, so a role removed between queueing and running takes effect.
+ *
+ * What IS skipped, and has to be: session liveness and the AAL check. There
+ * is no session to be live and no authenticator to have been challenged. That
+ * is why this is not exported from anywhere a request can reach and why the
+ * `process_` argument is required: every call names the background process it
+ * is for, and the audit row records it.
+ */
+export async function actorForBackgroundWork(
+  process_: string,
+  userId: string,
+): Promise<Actor> {
+  const rows = await sql<ResolveRow[]>`
+    select * from iam.resolve_actor(${userId}::uuid, null)
+  `;
+
+  const row = rows[0];
+
+  if (!row) {
+    throw new Error(
+      `${process_}: ${userId} has no IIMS access, so no work can be done as them.`,
+    );
+  }
+  if (row.status !== "active") {
+    throw new Error(
+      `${process_}: that account is ${row.status}, so queued work for it will not run.`,
+    );
+  }
+  if (row.locked_until && new Date(row.locked_until).getTime() > Date.now()) {
+    throw new Error(
+      `${process_}: that account is locked, so queued work for it will not run.`,
+    );
+  }
+
+  return {
+    userId: row.user_id,
+    email: row.email,
+    fullName: row.full_name,
+    photoPath: row.photo_path,
+    employeeId: row.employee_id,
+    jobTitle: row.job_title,
+    status: row.status,
+    clearance: row.clearance,
+    permissionsVersion: Number(row.permissions_version),
+    isAdministrator: row.is_administrator,
+    officeName: row.office_name,
+    departmentName: row.department_name,
+    countryCode: row.country_code,
+    primaryRole: row.primary_role,
+    mfaEnrolledAt: row.mfa_enrolled_at,
+    sessionTimeoutMinutes: row.session_timeout_minutes,
+    // The session that queued the work was aal2, which is the only way it
+    // could have been queued at all. Recording aal1 here would understate
+    // the assurance behind the request in the audit trail.
+    aal: "aal2",
+    requestId: crypto.randomUUID(),
+    ip: null,
+    userAgent: `pddc-iims/${process_}`,
+  };
+}

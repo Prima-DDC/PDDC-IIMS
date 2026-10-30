@@ -131,6 +131,15 @@ const ENTRIES: NavEntry[] = [
     icon: "audit",
     requires: { resource: "audit", action: "view" },
   },
+  {
+    href: "/admin/ai",
+    label: "AI providers",
+    icon: "ai",
+    // `view` rather than `configure`: somebody who may use the assistant
+    // should be able to see why it is unavailable without being able to
+    // change the allow-list.
+    requires: { resource: "ai", action: "view" },
+  },
 ];
 
 export interface Navigation {

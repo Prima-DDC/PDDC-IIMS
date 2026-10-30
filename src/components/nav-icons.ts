@@ -1,5 +1,6 @@
 import {
   Bell,
+  Bot,
   Briefcase,
   CheckSquare,
   Handshake,
@@ -53,6 +54,7 @@ export const NAV_ICONS = {
   safety: ShieldAlert,
   users: Users,
   audit: Scale,
+  ai: Bot,
 } as const;
 
 export type NavIconName = keyof typeof NAV_ICONS;
