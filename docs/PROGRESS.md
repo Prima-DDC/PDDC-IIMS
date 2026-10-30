@@ -30,7 +30,7 @@ node --env-file=.env.local scripts/check-coexistence.mjs     # website untouched
 | M5 | Intelligence: entities, sources, information, findings | Done, verified |
 | M6 | Reporting, QA, closure, archive, management reports | Done, verified end to end |
 | M7 | Notifications, dashboards, AI gateway | Done, verified |
-| M8 | Hardening and the PRD 20.1 acceptance demo | Not started |
+| M8 | Hardening and the PRD 20.1 acceptance demo | CSP, limits, idempotency, file checks, demo and runbook done |
 
 Sections not yet built render an honest placeholder naming their milestone and
 what they will contain, rather than a dead link or a screen of invented data.
@@ -1205,6 +1205,173 @@ different prompts, and the kinds are already in the job table's CHECK.
 
 ---
 
+## M8: hardening and acceptance
+
+PRD 14, 20 and 21.7. Three of the four pieces are done and the fourth needs a
+decision from PDDC rather than more code.
+
+### A strict CSP (PRD 14)
+
+A nonce per request, built in the proxy and set on the REQUEST as well as the
+response, because that is where Next looks for it when deciding which nonce
+to put on its own script tags. `script-src` admits nothing but that nonce and
+`'strict-dynamic'`.
+
+Two directives are looser and both are argued in the code rather than left to
+be noticed. `style-src` carries `'unsafe-inline'`: React writes `style`
+attributes for anything data-driven, and this platform has several, the width
+of a dashboard bar being a number from a query. CSP governs style ATTRIBUTES
+under `style-src`, so a nonce cannot reach them, and the alternatives were a
+stylesheet per render or giving up data-driven widths. Inline style is not
+code execution, so it buys an attacker defacement rather than script.
+`connect-src` and `img-src` name the one Supabase project rather than
+`*.supabase.co`, because auth, storage and realtime all go straight from the
+browser to it and another tenant's bucket should not be a permitted
+destination.
+
+**Verified in a real browser**, which is the only way a CSP can be: the auth
+journey signs in, enrols an authenticator and signs out under it. A policy
+that blocked Next's own bundles would have produced a blank page, and the
+suite would have failed on the first assertion.
+
+### Rate limiting (PRD 14)
+
+Fixed windows counted in Postgres, since PRD 21.3 asks for Redis and Supabase
+does not provide one. The count and the decision are one statement, so two
+requests arriving together cannot both read one-under-the-limit and both
+proceed; the test fires five at once and asserts five distinct counts.
+
+A fixed window admits up to twice the limit across a boundary, which is a
+known property and acceptable here: these limits stop abuse and runaway
+loops, not meter a paid API to the request.
+
+Applied to the cron routes, counted AFTER the secret check so a flood of
+unauthenticated calls cannot exhaust the window and lock the real scheduler
+out of its own route, and to the management export per actor, because each
+call is a full read of the case register and PRD 14 lists mass downloads
+among the things to watch for.
+
+**It fails open**, and that is the one decision here worth arguing with. If
+the database is unreachable the limiter cannot answer; failing closed would
+mean a database blip takes the platform down for everybody including whoever
+is diagnosing it. The limiter is not the authorisation layer, and every route
+behind it still checks a secret or a permission, both of which fail closed.
+
+### Idempotency (PRD 14, 21.7)
+
+Migration 0061. A key is claimed, completed or released in one statement, so
+concurrent duplicates cannot both believe they are first. Four outcomes:
+proceed, replay with the stored response, running, or conflict. The conflict
+case is PRD 21.7's 422: the same key with a different body is a client bug,
+and serving it the stored answer would tell somebody their new values were
+saved when the old ones were.
+
+**A refusal releases its key**, which is the part that makes this usable.
+Somebody told to check a highlighted field, who corrects it and submits the
+same form again, is sending the same key with a different body; a stored
+failure would meet that with "conflict" for ever. Only a success is
+remembered.
+
+Wired into case, client and engagement creation, which are the mutations that
+MINT: each takes a number from `config.next_human_id`, and a duplicate is a
+second record with a second number rather than a refused edit. An edit does
+not need a key, because it carries `expectedVersion` and a duplicate gets a
+409; a status transition does not, because the state machine refuses a
+repeat.
+
+The key comes from the server component rendering the form, and getting there
+took two wrong turns worth recording. `useId` is stable across page loads, so
+the same form submitted today and tomorrow would collide and the second
+submission would be refused as a conflict. A client-generated value differs
+from the server's HTML and breaks hydration. A server-rendered token is
+unique per render and identical for every submission of that render, which is
+exactly the property wanted.
+
+### File-type and malware checks (PRD 14)
+
+An allow-list of accepted types, applied server-side at upload because a
+picker is a convenience and a form is a POST, and a signature check during
+verification, in the same pass that computes the hash.
+
+**The test for this found a real hole in the first design.** An executable
+renamed `statement.pdf` passes the allow-list: the browser reports
+`application/pdf` because the extension implies it, and the extension is part
+of a name. The signature check then sniffed it as `unknown`, and `unknown`
+has to pass or every CSV is refused. So the signature table now includes the
+known-dangerous formats, not to block them by name but so a disguise can be
+RECOGNISED, and that check runs BEFORE the unsigned-type pass because a shell
+script genuinely is text and would otherwise have gone through on
+`text/plain`.
+
+A disguised file is recorded as a MISMATCH even when its hash agrees, which
+is the right verdict rather than a harsh one: the hash proves the object is
+the one that was uploaded, and the signature proves it is not what the
+register says it is. An item whose register entry is wrong cannot be cited in
+a report, which is what `mismatch` already means.
+
+The lesson, written here because it generalises: "refuse what you do not
+know" and "refuse what you know is wrong" are different rules. The first
+refuses a CSV; only the second catches the file somebody disguised.
+
+### The acceptance demonstration (PRD 20.1)
+
+`npm run seed:demo` plants four records and deliberately does not create the
+case: creating it is step 4, and a seed that had already done the
+demonstration would prove nothing. What it plants is what the walkthrough
+cannot produce for itself, which is the history a conflict check collides
+with.
+
+Measured against the live project after seeding, which is what PRD 20.2 asks
+to be true:
+
+```
+ABC Insurance Ltd  -> ABC Insurance Brokers Ltd    0.64
+ABC Holdings Ltd   -> ABC Holdings Ghana Limited   0.40
+John Mensah        -> John K. Mensah               1.00  (via its alias)
+                   -> Kwabena Mensah               0.35  (similar spelling)
+Kofi Asante        -> nothing
+```
+
+The first version prefixed every fixture name with "DEMO ", and that
+distorted the only thing the fixtures exist for: screening works on
+normalised names, so an added word changes every similarity score and gives
+two unrelated fixtures a token in common. "ABC Holdings Ltd" scored 0.27
+against "DEMO ABC Holdings Ghana Limited" and 0.40 against the same name
+without the prefix. The marker moved into the notes, which is also what the
+clean step matches on.
+
+`docs/acceptance-demo.md` is the walkthrough: twenty-six steps, what to
+click, which of four accounts to be, and what each step proves. It ends with
+a section saying plainly what the demonstration does NOT cover, because a
+walkthrough that implied completeness would be worse than one that did not.
+
+### Backup and restore (PRD 14)
+
+`docs/runbook-backup-restore.md`, and the gap in it matters more than the
+procedure. Two things are worth repeating here because they are easy to
+assume away:
+
+**Storage objects are not in a database backup.** Restoring the database
+gives you every evidence RECORD, with its hash, its custody chain and its
+classification, pointing at files that are no longer there. The off-system
+object copy is specified, with the manifest query it needs, and is not built,
+because the destination and who holds its credentials are PDDC's to choose
+and a job written against a guess would be rewritten. Until then evidence
+files have no backup, which is said in writing rather than left in a runbook.
+
+**A restore of this project restores primaddc.com too**, to the same moment,
+because they share it. So the runbook's order of preference puts the recycle
+bin first, a corrective migration second, a single-table restore into a
+staging table third, and a full project restore last and only after telling
+the website's owner.
+
+The audit trail is the one thing a restore does not repair: a restore brings
+back a consistent chain as of the backup, and `audit.audit_log` is never
+restored row by row, because a gap in the trail recorded as a gap is
+truthful and a reconstructed one is not.
+
+---
+
 ## Bugs and design changes found during the build
 
 Each of these changed the design or the code, and each was found by a test or
@@ -2318,6 +2485,56 @@ by inspecting the live platform rather than by reading documentation:
     rather than a mistake in the test: a trigger in the other application
     runs inside this one's transactions.
 
+94. **An allow-list of file types let a disguised executable through, and the
+    test for it was the thing that noticed.** The upload check compares what
+    the browser said the file is against the extension it was given, and both
+    agree for an executable renamed `statement.pdf`, because the browser
+    reports whatever the extension implies. The signature check behind it then
+    sniffed the bytes as `unknown`, and `unknown` passes: it has to, or every
+    CSV and `.eml` is refused for having no magic number.
+
+    So the first design caught a png claiming to be a pdf and missed the only
+    case anybody would actually attempt. The fix is a short table of
+    known-dangerous signatures, not used to block by name, since the
+    allow-list already refuses every one of them when declared honestly, but
+    used so a disguise can be NAMED. It runs before the unsigned-type pass,
+    because a shell script genuinely is text and would otherwise have gone
+    through as `text/plain`.
+
+    The general lesson: "refuse what you do not know" and "refuse what you
+    know is wrong" are different rules, and only the second one catches a
+    disguise.
+
+95. **An idempotency key generated with `useId` would have refused a
+    legitimate second submission.** `useId` is stable across renders and
+    across hydration, which is what made it look right, and it is also stable
+    across PAGE LOADS: the same form in the same position gets the same id
+    tomorrow. So "add a contact" twice in a day would present one key with two
+    bodies, and the second would be refused as a conflict with a message about
+    reloading that would not have helped.
+
+    The alternative that suggests itself, generating the key on the client,
+    breaks hydration: the server's HTML would carry a different value from the
+    client's first render. The answer is a token from the server component
+    that renders the form, which is unique per render and identical for every
+    submission of that render. Caught by reasoning rather than by a test,
+    which is worth admitting: nothing in the suite would have failed, and the
+    symptom would have been a form that refused one submission in a hundred.
+
+96. **Three integration fixtures were role-labelled and the labels meant
+    nothing.** The evidence, intel and reporting suites all seeded an
+    Operations Manager and then registered evidence and attached files as
+    them. PRD 16 gives an Operations Manager `V` on evidence and nothing more.
+    It passed because `postgres` holds `rolbypassrls`, so every policy those
+    writes went through was inert, and it only broke when migration 0051
+    introduced a check inside a function body, which a bypass cannot skip.
+
+    The fixtures now carry the Investigator role that PRD 16 actually gives
+    upload to. The wider point is the same one as item 89 and is now true of
+    three suites: a test connecting as `postgres` proves nothing about
+    row-level security, and a fixture whose roles do not matter is a fixture
+    that will mislead somebody later.
+
 ---
 
 ## Performance, measured
@@ -2485,6 +2702,15 @@ Pro that the evidence store needs anyway.
   what its retention terms say, and a supervisor turns it on for a case with
   a reason. Nothing needs to change in the code for PDDC to answer this one
   way or the other.
+- **Evidence files have no off-system backup yet**, and this is the largest
+  outstanding risk in the platform. No database backup includes Storage
+  objects, so a restore today returns every evidence record, with its hash and
+  its custody chain, pointing at files that are gone. The job is specified in
+  `docs/runbook-backup-restore.md` with the manifest query it needs; what it
+  waits on is PDDC choosing a destination and who holds its credentials.
+- **`npm run seed:demo` writes to the live project.** Four fixtures, marked in
+  their notes, removed by `npm run seed:demo -- clean`. It refuses to run
+  without `DEMO_ALLOW_SEED=1`.
 - **Credentials pasted into chat** (service-role key, database password) should
   be rotated.
 - **End-to-end fixtures are real accounts** in the shared project, named

@@ -21,7 +21,9 @@
     "test:unit": "node ./node_modules/vitest/dist/cli.js run src",
     "seed:e2e": "tsx --env-file=.env.local scripts/seed-e2e-users.ts",
     "grant-access": "tsx --env-file=.env.local scripts/grant-iims-access.ts",
-    "clean:e2e": "tsx --env-file=.env.local scripts/clean-e2e-residue.ts"
+    "clean:e2e": "tsx --env-file=.env.local scripts/clean-e2e-residue.ts",
+    "seed:demo": "tsx --env-file=.env.local scripts/seed-demo-case.ts",
+    "validate:migrations": "node --env-file=.env.local scripts/validate-migrations.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
