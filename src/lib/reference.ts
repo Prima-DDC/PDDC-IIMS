@@ -1,7 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import type postgres from "postgres";
-import type { Actor } from "@/lib/auth/session";
+import { asActor, type Actor } from "@/lib/auth/session";
 import { iam } from "@/modules/iam";
 
 /**
@@ -27,16 +27,37 @@ import { iam } from "@/modules/iam";
  * people on the same page can legitimately get different answers.
  */
 
+/**
+ * The names of active colleagues, for the "who did this" pickers.
+ *
+ * Reads `iam.staff_directory()` rather than listing `iam.users`, and the
+ * difference is not cosmetic. The `iam.users` select policy is
+ * `id = current_user_id() OR has_permission('users','view')`, and PRD 16
+ * gives `users` rights to CEO/Admin alone, so listing it returned exactly one
+ * name to an investigator: their own. A custody entry has to record who
+ * released an item and who received it (PRD 6.2), which made the chain of
+ * custody unusable by the very people who handle evidence. Every other "who
+ * did this" picker was narrowed in the same way, and only looked right
+ * because each defaults to the current user.
+ *
+ * The function returns id and name and nothing else, so nobody gains sight of
+ * a colleague's clearance, status or lockout state in order to spell their
+ * name. See migration 0052.
+ */
 export const staffDirectory = cache(
   async (
     actor: Actor,
     tx?: postgres.TransactionSql,
   ): Promise<Array<{ id: string; name: string }>> => {
-    const result = await iam(actor, tx).users.list({ status: "active", limit: 200 });
-    return result.rows.map((user) => ({
-      id: user.id,
-      name: user.fullName ?? user.email,
-    }));
+    // `tx` when a caller already holds one, so this joins their transaction
+    // and its actor GUCs rather than opening a second against a pool of one.
+    const read = (sql: postgres.TransactionSql) =>
+      sql<{ id: string; name: string }[]>`
+        select id, name from iam.staff_directory()
+      `;
+
+    const rows = tx ? await read(tx) : await asActor(actor, read);
+    return rows.map((row) => ({ id: row.id, name: row.name }));
   },
 );
 

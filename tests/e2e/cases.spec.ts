@@ -330,7 +330,7 @@ test.describe("the case journey, end to end", () => {
         // request, so deciding it removes both: what the approver sees
         // afterwards is version 2 beside version 1, which is the whole point
         // of PRD 5.4 and a better thing to assert than a banner.
-        await expect(scope.getByText("Version 2")).toBeVisible();
+        await expect(scope.getByText(/^Version 2$/)).toBeVisible();
         await expect(
           scope.getByRole("button", { name: /record the decision/i }),
         ).toHaveCount(0);
@@ -341,7 +341,7 @@ test.describe("the case journey, end to end", () => {
 
       await page.goto(caseUrl);
       const scope = panel(page, "Scope");
-      await expect(scope.getByText("Version 2")).toBeVisible();
+      await expect(scope.getByText(/^Version 2$/)).toBeVisible();
       await expect(scope.getByText(/five subsidiaries/i)).toBeVisible();
       // The original is still there, beside the revision (PRD 5.4).
       await expect(scope.getByText(/The original scope, version 1/i)).toBeVisible();

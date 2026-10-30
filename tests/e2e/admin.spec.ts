@@ -1,5 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { panel, settled } from "./helpers";
+import {
+  panel,
+  settled,
+  submitAndSettle,
+} from "./helpers";
 // No sign-in here: the project supplies a stored session, and the one test
 // that needs a different identity loads that identity's stored session too.
 
@@ -461,29 +465,62 @@ test.describe("the case lifecycle", () => {
     const lifecycle = panel(page, "Case lifecycle: PDDC standard investigation lifecycle");
     await expect(lifecycle).toBeVisible();
 
-    // The 14 stages PRD 4.2 names, as data rather than code.
+    /*
+     * The fourteen stages PRD 4.2 names, as data rather than code.
+     *
+     * Taken from the sentence itself: "New, Pending Approval, Approved,
+     * Assigned, Investigation in Progress, Awaiting Information, Analysis,
+     * Draft Report, Quality Review, Approved, Delivered, Completed, Closed,
+     * Archived". The second "Approved" is the report's, which migration 0023
+     * disambiguates as "Report Approved".
+     *
+     * This list previously held "Planning", "Active Investigation", "Client
+     * Review" and "Final Report", which PRD 4.2 does not mention: the first
+     * belongs to the methodology of PRD 4.3, and the others to nothing. It
+     * also omitted two stages that do exist. So the test asserted a lifecycle
+     * the platform had never implemented, and failed against a correct one.
+     */
     for (const stage of [
       "New",
       "Pending Approval",
       "Approved",
-      "Planning",
-      "Active Investigation",
+      "Assigned",
+      "Investigation in Progress",
+      "Awaiting Information",
       "Analysis",
       "Draft Report",
       "Quality Review",
-      "Client Review",
-      "Final Report",
+      "Report Approved",
       "Delivered",
+      "Completed",
       "Closed",
       "Archived",
     ]) {
       await expect(lifecycle.getByText(stage, { exact: true }).first()).toBeVisible();
     }
 
-    // A terminal stage is where a case stops, so it offers no route out and
-    // no control to add one.
-    const closed = lifecycle.locator("li", { hasText: "Closed" }).first();
-    await expect(closed.getByText(/Nothing leaves a terminal stage/i)).toBeVisible();
+    /*
+     * The stage nothing leaves is Archived, not Closed.
+     *
+     * Two mistakes were stacked here. The row was found with
+     * `hasText: "Closed"`, and since every stage lists the stages it can
+     * move TO, "Completed" contains the word "Closed" and sorts first, so
+     * the assertion was aimed at a non-terminal stage. Correcting that to
+     * select by key then showed the real error: Closed IS terminal and has
+     * a route to Archived, because a closed case can still be archived.
+     * Both stages are terminal; only Archived is the end of the line.
+     */
+    const byKey = (key: string) =>
+      lifecycle
+        .locator("li")
+        .filter({ has: page.getByText(key, { exact: true }) })
+        .first();
+
+    await expect(
+      byKey("archived").getByText(/Nothing leaves a terminal stage/i),
+    ).toBeVisible();
+    // Closed is terminal too, and keeps its one route on purpose.
+    await expect(byKey("closed").getByText(/Archived/).first()).toBeVisible();
   });
 
   test("a stage key cannot be reused", async ({ page }) => {
@@ -528,7 +565,33 @@ test.describe("the case lifecycle", () => {
     await settled(page);
 
     const lifecycle = panel(page, "Case lifecycle: PDDC standard investigation lifecycle");
-    const stage = lifecycle.locator("li", { hasText: "Analysis" }).first();
+
+    /*
+     * Selected by KEY, not by a substring of the name, and this matters more
+     * than it looks.
+     *
+     * This test renames a stage of the live lifecycle every case screen
+     * reads, and renames it back. It used to find the stage with
+     * `hasText: "Analysis"`, which is a substring match, and the name it
+     * renames to, "Analysis and Review", contains "Analysis". So the moment
+     * a run failed between the rename and the restore, the next run's
+     * selector matched the already-renamed stage or a neighbour and renamed
+     * something else again. Repeated partial runs left `assigned` called
+     * "Analysis" and `in_progress` called "Analysis and Review": two stages
+     * sharing one name, no stage called "Assigned", and a lifecycle nobody
+     * could read. Migration 0050 restored it.
+     *
+     * The key is unique, it is rendered beside the name, and renaming is
+     * precisely the operation that does NOT change it, which makes it the
+     * only safe handle here.
+     */
+    const byKey = (key: string) =>
+      lifecycle
+        .locator("li")
+        .filter({ has: page.getByText(key, { exact: true }) })
+        .first();
+
+    const stage = byKey("analysis");
     await stage.getByRole("button", { name: /^rename$/i }).click();
     await stage.getByLabel("New name").fill("Analysis and Review");
     await stage.getByRole("button", { name: /^rename$/i }).last().click();
@@ -536,19 +599,34 @@ test.describe("the case lifecycle", () => {
     await expect(lifecycle.getByText(/The key stays as it was/i)).toBeVisible();
     await page.goto("/admin/workflows");
     await expect(
-      lifecycle.getByText("Analysis and Review", { exact: true }).first(),
+      byKey("analysis").getByText("Analysis and Review", { exact: true }).first(),
     ).toBeVisible();
     // The key is what permissions and saved filters use, so it is unchanged.
     await expect(lifecycle.getByText("analysis", { exact: true })).toBeVisible();
 
-    // Put it back: this is the live lifecycle every case screen reads.
-    const renamed = lifecycle.locator("li", { hasText: "Analysis and Review" }).first();
+    // Put it back, by the same key. This is the live lifecycle every case
+    // screen reads, so leaving it renamed is leaving the product broken.
+    const renamed = byKey("analysis");
     await renamed.getByRole("button", { name: /^rename$/i }).click();
     await renamed.getByLabel("New name").fill("Analysis");
-    await renamed.getByRole("button", { name: /^rename$/i }).last().click();
+    // Waited for: a navigation straight after a submit renders the page
+    // before the write commits, so the rename is invisible to everything
+    // that follows and the count read one short.
+    await submitAndSettle(renamed.getByRole("button", { name: /^rename$/i }).last());
     await page.goto("/admin/workflows");
     await expect(
-      lifecycle.getByText("Analysis", { exact: true }).first(),
+            // `.first()` is the stage's NAME. The row also shows its methodology
+      // stage, which for this one is also "Analysis", so an unanchored match
+      // finds two elements and strict mode refuses.
+      byKey("analysis").getByText("Analysis", { exact: true }).first(),
+    ).toBeVisible();
+    // And nothing else was touched: "Assigned" and "Investigation in
+    // Progress" are the neighbours the old selector used to catch.
+    await expect(
+      lifecycle.getByText("Assigned", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      lifecycle.getByText("Investigation in Progress", { exact: true }),
     ).toBeVisible();
   });
 
@@ -557,11 +635,32 @@ test.describe("the case lifecycle", () => {
     await settled(page);
 
     const types = panel(page, "Case types");
-    const row = types.locator("tr", { hasText: "Asset Search" });
-    await expect(row.getByText("Offered")).toBeVisible();
+    const row = () => types.locator("tr", { hasText: "Asset Search" });
 
-    page.once("dialog", (dialog) => dialog.accept());
-    await row.getByRole("button", { name: /^retire$/i }).click();
+    /*
+     * Put it back on offer first, if a previous run left it retired.
+     *
+     * This test mutates shared configuration: the case types every new-case
+     * form reads. It retires one and offers it again, and when it failed
+     * between those two steps it left `asset_search` inactive, so the next
+     * run's opening assertion found "Retired" and failed on the starting
+     * state rather than on anything it was testing. The same trap as the
+     * stage rename, which migration 0050 had to clean up after.
+     *
+     * So the test no longer assumes how it found the world. It makes the
+     * state it needs, does its work, and restores.
+     */
+    if ((await row().getByText("Retired").count()) > 0) {
+      await submitAndSettle(row().getByRole("button", { name: /offer again/i }));
+      await page.goto("/admin/workflows");
+      await settled(page);
+    }
+
+    await expect(row().getByText("Offered")).toBeVisible();
+
+    // `submitAndSettle` accepts the confirmation itself and waits for the
+    // action to report back, so no separate dialog handler and no race.
+    await submitAndSettle(row().getByRole("button", { name: /^retire$/i }));
     await expect(
       types.locator("tr", { hasText: "Asset Search" }).getByText("Retired"),
     ).toBeVisible();
@@ -574,10 +673,10 @@ test.describe("the case lifecycle", () => {
     expect(options).not.toContain("Asset Search");
 
     await page.goto("/admin/workflows");
-    await types
+    const offerAgain = types
       .locator("tr", { hasText: "Asset Search" })
-      .getByRole("button", { name: /offer again/i })
-      .click();
+      .getByRole("button", { name: /offer again/i });
+    await submitAndSettle(offerAgain);
     await expect(
       types.locator("tr", { hasText: "Asset Search" }).getByText("Offered"),
     ).toBeVisible();

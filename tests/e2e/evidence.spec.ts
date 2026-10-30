@@ -1,6 +1,13 @@
 import { expect, test, type Locator } from "@playwright/test";
 import { openApprovedCase } from "./case-fixture";
-import { caseTab, openForm, panel, selectContaining, settled } from "./helpers";
+import {
+  caseTab,
+  openForm,
+  panel,
+  selectContaining,
+  settled,
+  submitAndSettle,
+} from "./helpers";
 
 /**
  * Evidence, chain of custody and case documents, through the real screens.
@@ -61,19 +68,37 @@ const DOCUMENT_FILE_V2 = {
 };
 
 /**
- * Uploads through the real control and waits for the hash and the store.
+ * Uploads through the real control and waits for the object to be stored.
  *
- * The component hashes the file in the browser before it sends it, so the
- * confirmation is the proof that both halves happened: a declared hash on
- * screen means WebCrypto ran, and the control only reaches that state after
- * the object is in the bucket.
+ * The component hashes the file in the browser with WebCrypto, sends it
+ * straight to Storage, and only then reports a result, so the file's name
+ * appearing in the panel is proof that both halves happened.
+ *
+ * It used to wait for "hash declared", which is text inside `FileUpload`
+ * itself, and that cannot work for evidence: the evidence panel renders
+ * `{!uploaded ? <FileUpload/> : <ActionForm/>}`, so the component UNMOUNTS
+ * the moment it succeeds and takes its own message with it. The helper was
+ * waiting for a string that only exists before the thing it was waiting for
+ * happens. It timed out at sixty seconds every time, with the object sitting
+ * in the bucket and the panel saying so.
+ *
+ * That also explains the files left in `evidence-originals` with no item
+ * pointing at them: the upload is step one of two, and the test never
+ * reached the "record it against this item" step that writes the hash onto
+ * the record. The platform was behaving exactly as designed.
+ *
+ * The file name works for both flows, since the document form keeps
+ * `FileUpload` mounted and the evidence panel names the file in its
+ * follow-up prompt.
  */
 async function upload(
   scope: Locator,
   file: { name: string; mimeType: string; buffer: Buffer },
 ) {
   await scope.locator('input[type="file"]').setInputFiles(file);
-  await expect(scope.getByText(/hash declared/i)).toBeVisible({ timeout: 60_000 });
+  await expect(scope.getByText(file.name, { exact: false }).first()).toBeVisible({
+    timeout: 90_000,
+  });
 }
 
 test.describe("evidence, custody and documents, end to end", () => {
@@ -180,15 +205,49 @@ test.describe("evidence, custody and documents, end to end", () => {
         // chain starts nowhere is an item nobody can rely on.
         const custody = panel(field, "Chain of custody");
         await expect(custody.getByText(/Chain intact across 1 entry/i)).toBeVisible();
-        await expect(panel(field, "The file").getByText(/^No file$/i)).toBeVisible();
+        /*
+         * An investigator who may upload is offered the uploader, not an
+         * empty state. The panel renders three ways: the file's details if
+         * there is one, the upload control if there is not and this person
+         * may add one, and "No file" only for somebody who may not. This
+         * test is the investigator who collected the item, so the third case
+         * was never theirs to see, and asserting it was asserting a screen
+         * the platform does not show them.
+         *
+         * What "starts with no file" looks like from here is an upload
+         * control and no integrity seal, since a seal is a claim about a
+         * stored object.
+         */
+        const filePanel = panel(field, "The file");
+        await expect(filePanel.locator("input[type='file']")).toBeAttached();
+        await expect(filePanel.getByText(/Hashed in your browser/i)).toBeVisible();
+        // No negative assertion on the word "verified": the panel's own
+        // description explains that the server verifies what the browser
+        // hashed, so the word is on screen before any file exists. The
+        // uploader being offered is the whole claim here, and the absence of
+        // a verify control is the precise form of "nothing stored yet".
+        await expect(
+          filePanel.getByRole("button", { name: /verify it now/i }),
+        ).toHaveCount(0);
       });
 
       await test.step("upload the file, and the item says the hash is only declared", async () => {
         const file = panel(field, "The file");
         await upload(file, FILE);
-        await file
-          .getByRole("button", { name: /record the file against this item/i })
-          .click();
+        /*
+         * Waited for, because the assertions below read server state.
+         *
+         * A bare click raced the action, and the race was masked: the seal
+         * reads "Awaiting verification" from the state the component already
+         * holds, so the first assertion passed while the write was still in
+         * flight, and the next one, which needs the re-rendered Alert, found
+         * nothing. The item kept its file in the bucket and no hash on the
+         * record, which looked like a broken attach step rather than a test
+         * that had not waited.
+         */
+        await submitAndSettle(
+          file.getByRole("button", { name: /record the file against this item/i }),
+        );
 
         await expect(file.getByText(/awaiting verification/i).first()).toBeVisible();
         // The honest distinction, which is the whole point of PRD 6.3.
@@ -214,7 +273,10 @@ test.describe("evidence, custody and documents, end to end", () => {
 
         const custody = panel(field, "Chain of custody");
         await custody.getByRole("button", { name: /record a movement/i }).click();
-        await custody.locator("select#custody-type").selectOption("transfer");
+        // `transferred`, which is the vocabulary's word. "transfer" is not a
+        // custody event type and never was, so selectOption waited fifty
+        // seconds for an option that could not exist.
+        await custody.locator("select#custody-type").selectOption("transferred");
         await selectContaining(
           custody.locator("select#custody-released"),
           "E2E Investigator",
@@ -239,7 +301,7 @@ test.describe("evidence, custody and documents, end to end", () => {
         await ledger
           .locator("#custody-correction-reason")
           .fill("The room was 6, not 4. Recorded from the store's own log.");
-        await ledger.locator("select#custody-type").selectOption("transfer");
+        await ledger.locator("select#custody-type").selectOption("transferred");
         await selectContaining(
           ledger.locator("select#custody-released"),
           "E2E Investigator",
@@ -252,7 +314,10 @@ test.describe("evidence, custody and documents, end to end", () => {
           .locator("#custody-purpose")
           .fill("Taken to the evidence store for overnight safekeeping");
         await ledger.locator("#custody-location").fill("Evidence store, room 6");
-        await ledger.getByRole("button", { name: /record the correction/i }).click();
+        // Waited for: a navigation straight after a submit renders the page
+        // before the write commits, so the correction is invisible to everything
+        // that follows and the count read one short.
+        await submitAndSettle(ledger.getByRole("button", { name: /record the correction/i }));
 
         await field.goto(itemUrl);
         await settled(field);
@@ -356,11 +421,43 @@ test.describe("evidence, custody and documents, end to end", () => {
         await settled(second);
 
         const file = panel(second, "The file");
-        await file.getByRole("button", { name: /verify it now/i }).click();
+        await submitAndSettle(
+          file.getByRole("button", { name: /verify it now/i }),
+        );
 
-        await expect(
-          file.getByText(/matches the hash recorded when/i),
-        ).toBeVisible({ timeout: 90_000 });
+        /*
+         * The seal's own label, which is "Verified" and a date.
+         *
+         * Two wrong guesses preceded this one. The first waited for "matches
+         * the hash recorded when", a phrase the platform uses only in the
+         * NEGATIVE, to say a stored file "does not match the hash recorded
+         * when the item was collected": the test was waiting for part of a
+         * mismatch warning on a file that had just verified correctly. The
+         * second came from `src/components/IntegritySeal.tsx`, which is not
+         * the component this screen renders and is imported nowhere at all.
+         * The one in use is `EvidenceViews`, and its labels come from
+         * `INTEGRITY_STATUS_LABELS`.
+         */
+        /*
+         * Polled by RELOADING, because the verification is asynchronous.
+         *
+         * PRD 6.3 has the server read the stored object back and recompute
+         * the hash itself, which is the point: a hash the browser declared is
+         * unattestable. That work finishes after the action returns, measured
+         * here at about a hundred seconds, and the seal is server-rendered
+         * from the item's status. So a page fetched before the worker
+         * finishes says "Awaiting verification" and goes on saying so for
+         * ever, because `toBeVisible` re-queries the DOM and the DOM is a
+         * snapshot. Waiting longer on one render cannot help; re-fetching is
+         * the only thing that can.
+         */
+        await expect(async () => {
+          await second.goto(itemUrl);
+          await settled(second);
+          await expect(
+            panel(second, "The file").getByText(/^Verified/).first(),
+          ).toBeVisible({ timeout: 5_000 });
+        }).toPass({ timeout: 240_000, intervals: [5_000] });
 
         // And the check itself is kept, with both hashes, as a permanent
         // record rather than a transient banner.
@@ -381,11 +478,22 @@ test.describe("evidence, custody and documents, end to end", () => {
         const documentUrl = second.url();
 
         const versions = panel(second, "Versions");
-        second.once("dialog", (dialog) => dialog.accept());
-        await versions.getByRole("button", { name: /approve v0\.1/i }).click();
-        await expect(
-          second.getByText(/v0\.1 approved and locked/i),
-        ).toBeVisible();
+        /*
+         * No banner assertion here, and no separate dialog handler.
+         *
+         * Approving is the last thing anybody can do to a version, so the
+         * control goes when it succeeds and takes its own success message
+         * with it: "v0.1 approved and locked" is true for the instant
+         * between the write and the re-render, which is not something a test
+         * can rely on seeing. The durable claim is the panel below, read
+         * fresh, and that is what this step is really about.
+         *
+         * `submitAndSettle` accepts the confirmation itself, so the one-shot
+         * handler that used to sit here has gone with it.
+         */
+        await submitAndSettle(
+          versions.getByRole("button", { name: /approve v0\.1/i }),
+        );
 
         await second.goto(documentUrl);
         await settled(second);

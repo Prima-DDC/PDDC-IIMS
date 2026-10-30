@@ -1,6 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { openApprovedCase } from "./case-fixture";
-import { caseTab, openForm, panel, selectContaining, settled } from "./helpers";
+import {
+  caseTab,
+  openForm,
+  panel,
+  selectContaining,
+  settled,
+  submitAndSettle,
+} from "./helpers";
 
 /**
  * Investigator safety and case commercials, driven through the real interface
@@ -30,7 +37,10 @@ test.describe("the safety and finance journey, end to end", () => {
   // one has the case fixture in front of it as well.
   test.setTimeout(20 * 60 * 1000);
 
-  test("from a safety plan to an approved timesheet", async ({ page, browser }) => {
+  test("from a safety plan to an approved timesheet", async ({
+    page,
+    browser,
+  }) => {
     const stamp = Date.now().toString().slice(-7);
     const TITLE = `E2E field operation ${stamp}`;
 
@@ -50,7 +60,9 @@ test.describe("the safety and finance journey, end to end", () => {
       const safety = panel(page, "Safety");
       await expect(safety).toBeVisible();
 
-      await safety.locator("#safety-location").fill("Tema port, gate 3 car park");
+      await safety
+        .locator("#safety-location")
+        .fill("Tema port, gate 3 car park");
       await safety.locator("#safety-risk").selectOption("high");
       await safety.locator("#safety-contact-name").fill("Duty supervisor");
       await safety.locator("#safety-contact-phone").fill("+233 30 000 0000");
@@ -58,10 +70,16 @@ test.describe("the safety and finance journey, end to end", () => {
 
       // The instructions field appears as soon as there is a schedule, and is
       // required: a schedule nobody knows how to follow is not a schedule.
-      await expect(safety.locator("#safety-check-in-instructions")).toBeVisible();
-      await safety.getByRole("button", { name: /record the safety plan/i }).click();
       await expect(
-        safety.getByText(/Say how to check in|Check the highlighted fields/i).first(),
+        safety.locator("#safety-check-in-instructions"),
+      ).toBeVisible();
+      await submitAndSettle(
+        safety.getByRole("button", { name: /record the safety plan/i }),
+      );
+      await expect(
+        safety
+          .getByText(/Say how to check in|Check the highlighted fields/i)
+          .first(),
       ).toBeVisible();
     });
 
@@ -69,23 +87,42 @@ test.describe("the safety and finance journey, end to end", () => {
       const safety = panel(page, "Safety");
       await safety
         .locator("#safety-check-in-instructions")
-        .fill("Use the field screen, or ring the duty supervisor on the office line.");
+        .fill(
+          "Use the field screen, or ring the duty supervisor on the office line.",
+        );
       await safety
         .locator("#safety-hazards")
         .fill("The subject's security staff have turned visitors away before.");
       await safety
         .locator("#safety-instructions")
         .fill("Two people at all times. Withdraw if challenged.");
-      await safety.getByRole("button", { name: /record the safety plan/i }).click();
+      await submitAndSettle(
+        safety.getByRole("button", { name: /record the safety plan/i }),
+      );
 
-      // Recording the plan replaces the form with the plan, so the form's own
-      // banner goes with it. The plan on screen is the confirmation.
+      /*
+       * Recording the plan replaces the form with a summary of it, so the
+       * location on screen is the confirmation.
+       *
+       * This assertion was right all along; the submit above was not waited
+       * for, so it was read against the page as it stood before the write.
+       * An attempt to "fix" the assertion by looking for the edit control
+       * and the input's value was worse on both counts: once a plan exists
+       * the panel shows a read-only summary behind an "Edit the plan"
+       * button, so there is no input to read, and the form's labels were
+       * inferred from its source rather than from the rendered page.
+       */
       await expect(safety.getByText("Tema port, gate 3 car park")).toBeVisible();
+      await expect(
+        safety.getByRole("button", { name: /edit the plan/i }),
+      ).toBeVisible();
 
       await page.goto(caseTab(caseUrl, "safety"));
       const saved = panel(page, "Safety");
       await expect(saved.getByText("Tema port, gate 3 car park")).toBeVisible();
-      await expect(saved.getByText(/Duty supervisor, \+233 30 000 0000/)).toBeVisible();
+      await expect(
+        saved.getByText(/Duty supervisor, \+233 30 000 0000/),
+      ).toBeVisible();
       await expect(saved.getByText("4 hours")).toBeVisible();
     });
 
@@ -95,7 +132,9 @@ test.describe("the safety and finance journey, end to end", () => {
 
       // The time of the next check-in comes from the plan's interval, not
       // from anything the person in the field has to type.
-      await expect(safety.getByText(/The next check-in is due by \d{2}:\d{2}/)).toBeVisible();
+      await expect(
+        safety.getByText(/The next check-in is due by \d{2}:\d{2}/),
+      ).toBeVisible();
 
       await page.goto(caseTab(caseUrl, "safety"));
       const after = panel(page, "Safety");
@@ -109,12 +148,12 @@ test.describe("the safety and finance journey, end to end", () => {
 
       // Said before anything is recorded, because believing otherwise is the
       // dangerous misunderstanding.
-      await expect(
-        safety.getByText(/does not ring anybody/i),
-      ).toBeVisible();
+      await expect(safety.getByText(/does not ring anybody/i)).toBeVisible();
 
       await safety.getByRole("button", { name: /record it/i }).click();
-      await expect(safety.getByText(/Say what is wrong/i).first()).toBeVisible();
+      await expect(
+        safety.getByText(/Say what is wrong/i).first(),
+      ).toBeVisible();
 
       await safety
         .locator("#unsafe-notes")
@@ -131,7 +170,9 @@ test.describe("the safety and finance journey, end to end", () => {
       ).toBeVisible();
       // The number to ring is in the alarm itself, not a click away.
       await expect(
-        alarmed.getByText(/Emergency contact: Duty supervisor on \+233 30 000 0000/),
+        alarmed.getByText(
+          /Emergency contact: Duty supervisor on \+233 30 000 0000/,
+        ),
       ).toBeVisible();
     });
 
@@ -154,7 +195,9 @@ test.describe("the safety and finance journey, end to end", () => {
 
     await test.step("report an incident", async () => {
       const incidents = panel(page, "Incidents");
-      await incidents.getByRole("button", { name: /report an incident/i }).click();
+      await incidents
+        .getByRole("button", { name: /report an incident/i })
+        .click();
 
       await incidents.locator("#incident-type").selectOption("threat");
       await incidents.locator("#incident-severity").selectOption("high");
@@ -167,15 +210,21 @@ test.describe("the safety and finance journey, end to end", () => {
       await incidents
         .locator("#incident-action")
         .fill("Withdrew and reported it to the duty supervisor by telephone.");
-      await incidents.getByRole("button", { name: /record the incident/i }).click();
+      await incidents
+        .getByRole("button", { name: /record the incident/i })
+        .click();
 
-      await expect(incidents.getByText(/INC-\d{4}-\d{6} reported/i)).toBeVisible();
+      await expect(
+        incidents.getByText(/INC-\d{4}-\d{6} reported/i),
+      ).toBeVisible();
     });
 
     await test.step("a police reference cannot outlive its notification", async () => {
       await page.goto(caseTab(caseUrl, "safety"));
       const incidents = panel(page, "Incidents");
-      await incidents.getByRole("button", { name: /report an incident/i }).click();
+      await incidents
+        .getByRole("button", { name: /report an incident/i })
+        .click();
 
       // The reference field belongs to the box: it appears when the police
       // were notified and goes when they were not. So the contradiction the
@@ -183,11 +232,17 @@ test.describe("the safety and finance journey, end to end", () => {
       // better outcome. The rule stays as the backstop for anything that
       // reaches the database another way, and is unit tested there.
       await incidents.getByLabel(/the police were notified/i).check();
-      await expect(incidents.locator("#incident-police-reference")).toBeVisible();
-      await incidents.locator("#incident-police-reference").fill("CR/2026/4411");
+      await expect(
+        incidents.locator("#incident-police-reference"),
+      ).toBeVisible();
+      await incidents
+        .locator("#incident-police-reference")
+        .fill("CR/2026/4411");
 
       await incidents.getByLabel(/the police were notified/i).uncheck();
-      await expect(incidents.locator("#incident-police-reference")).toHaveCount(0);
+      await expect(incidents.locator("#incident-police-reference")).toHaveCount(
+        0,
+      );
 
       await incidents.getByRole("button", { name: /^cancel$/i }).click();
       await expect(
@@ -203,12 +258,17 @@ test.describe("the safety and finance journey, end to end", () => {
         incidents.getByText(/You are involved in this one/i).first(),
       ).toBeVisible();
 
-      await incidents.getByRole("button", { name: /move it on/i }).first().click();
+      await incidents
+        .getByRole("button", { name: /move it on/i })
+        .first()
+        .click();
       await incidents.locator("#incident-status").selectOption("closed");
       await incidents
         .locator("#incident-resolution")
         .fill("Escorted off site and reported to the client.");
-      await incidents.getByRole("button", { name: /move the incident/i }).click();
+      await incidents
+        .getByRole("button", { name: /move the incident/i })
+        .click();
 
       await expect(
         incidents.getByText(/somebody else has to close it/i).first(),
@@ -225,12 +285,17 @@ test.describe("the safety and finance journey, end to end", () => {
         await settled(admin);
 
         const incidents = panel(admin, "Incidents");
-        await incidents.getByRole("button", { name: /move it on/i }).first().click();
+        await incidents
+          .getByRole("button", { name: /move it on/i })
+          .first()
+          .click();
         await incidents.locator("#incident-status").selectOption("closed");
         await incidents
           .locator("#incident-resolution")
           .fill("Escorted off site and reported to the client.");
-        await incidents.getByRole("button", { name: /move the incident/i }).click();
+        await incidents
+          .getByRole("button", { name: /move the incident/i })
+          .click();
 
         await expect(incidents.getByText(/is now closed/i)).toBeVisible();
         await admin.close();
@@ -254,11 +319,17 @@ test.describe("the safety and finance journey, end to end", () => {
       // "Paid" is refused while money is outstanding: it is the status people
       // read instead of the numbers, so it has to be true.
       await money.locator("#fin-status").selectOption("paid");
-      await money.getByRole("button", { name: /record the commercials/i }).click();
-      await expect(money.getByText(/7500.00 is still outstanding/i)).toBeVisible();
+      await money
+        .getByRole("button", { name: /record the commercials/i })
+        .click();
+      await expect(
+        money.getByText(/7500.00 is still outstanding/i),
+      ).toBeVisible();
 
       await money.locator("#fin-status").selectOption("part_paid");
-      await money.getByRole("button", { name: /record the commercials/i }).click();
+      await money
+        .getByRole("button", { name: /record the commercials/i })
+        .click();
       // Same again: the panel swaps the form for the figures it just saved.
       await expect(money.getByText("GHS 7,500.00")).toBeVisible();
 
@@ -273,7 +344,9 @@ test.describe("the safety and finance journey, end to end", () => {
       const money = panel(page, "Commercials");
       await money.getByRole("button", { name: /^edit$/i }).click();
       await money.locator("#fin-invoice").fill("");
-      await money.getByRole("button", { name: /save the commercials/i }).click();
+      await money
+        .getByRole("button", { name: /save the commercials/i })
+        .click();
       await expect(
         money.getByText(/Record the invoice number alongside/i),
       ).toBeVisible();
@@ -293,7 +366,9 @@ test.describe("the safety and finance journey, end to end", () => {
         .fill("Static observation of the gate from the car park.");
       await time.getByRole("button", { name: /^log it$/i }).click();
 
-      await expect(time.getByText(/7.5 hours logged against PDDC-/i)).toBeVisible();
+      await expect(
+        time.getByText(/7.5 hours logged against PDDC-/i),
+      ).toBeVisible();
 
       await page.goto(caseTab(caseUrl, "finance"));
       const logged = panel(page, "Time");
@@ -338,7 +413,9 @@ test.describe("the safety and finance journey, end to end", () => {
       await expect(
         claimed.getByText(/your own claim, so somebody else decides it/i),
       ).toBeVisible();
-      await expect(claimed.getByRole("button", { name: /decide it/i })).toHaveCount(0);
+      await expect(
+        claimed.getByRole("button", { name: /decide it/i }),
+      ).toHaveCount(0);
     });
 
     await test.step("a second person approves the time and the cost", async () => {
@@ -351,14 +428,22 @@ test.describe("the safety and finance journey, end to end", () => {
         await settled(admin);
 
         const time = panel(admin, "Time");
-        await time.getByRole("button", { name: /^approve$/i }).first().click();
+        await time
+          .getByRole("button", { name: /^approve$/i })
+          .first()
+          .click();
         await expect(time.getByText("Approved").first()).toBeVisible();
 
         await admin.goto(caseTab(caseUrl, "finance"));
         const costs = panel(admin, "Costs");
-        await costs.getByRole("button", { name: /decide it/i }).first().click();
+        await costs
+          .getByRole("button", { name: /decide it/i })
+          .first()
+          .click();
         await costs.locator("#expense-status").selectOption("approved");
-        await costs.getByRole("button", { name: /record the decision/i }).click();
+        await costs
+          .getByRole("button", { name: /record the decision/i })
+          .click();
         await expect(costs.getByText(/is now approved/i)).toBeVisible();
         await admin.close();
       } finally {
@@ -369,7 +454,9 @@ test.describe("the safety and finance journey, end to end", () => {
       // An approved entry is frozen, so the edit control is gone.
       const time = panel(page, "Time");
       await expect(time.getByText("Approved").first()).toBeVisible();
-      await expect(time.getByRole("button", { name: /^edit$/i })).toHaveCount(0);
+      await expect(time.getByRole("button", { name: /^edit$/i })).toHaveCount(
+        0,
+      );
     });
 
     await test.step("the field screen shows the case once somebody is on it", async () => {
@@ -393,8 +480,12 @@ test.describe("the safety and finance journey, end to end", () => {
         assignment.locator("select#assign-user"),
         "E2E Operations Manager",
       );
-      await assignment.locator("select#assign-role").selectOption("lead_investigator");
-      await assignment.locator("#assign-reason").fill("Running this one personally");
+      await assignment
+        .locator("select#assign-role")
+        .selectOption("lead_investigator");
+      await assignment
+        .locator("#assign-reason")
+        .fill("Running this one personally");
       await assignment.getByRole("button", { name: /^assign$/i }).click();
       await expect(
         assignment.locator("tr", { hasText: "E2E Operations Manager" }),
@@ -408,7 +499,9 @@ test.describe("the safety and finance journey, end to end", () => {
       await expect(
         page.getByRole("link", { name: /Duty supervisor/ }),
       ).toHaveAttribute("href", "tel:+233300000000");
-      await expect(page.getByRole("button", { name: /^check in$/i })).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: /^check in$/i }),
+      ).toBeVisible();
     });
   });
 });

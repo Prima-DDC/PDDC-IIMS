@@ -373,7 +373,7 @@ test.describe("the intake pipeline, end to end", () => {
         await panelAt.locator("select#enquiry-stage").selectOption(stage);
         await panelAt.locator("#enquiry-stage-reason").fill(reason);
         await panelAt.getByRole("button", { name: /move to this stage/i }).click();
-        await expect(panelAt.getByText(new RegExp(`is now "${label}"`, "i"))).toBeVisible();
+        await expect(panelAt.getByText(new RegExp(`is now at "${label}"`, "i"))).toBeVisible();
         await page.goto(enquiryUrl);
       }
     });
@@ -419,7 +419,7 @@ test.describe("the intake pipeline, end to end", () => {
       await stage.locator("select#enquiry-stage").selectOption("quoted");
       await stage.locator("#enquiry-stage-reason").fill("Sending the quotation");
       await stage.getByRole("button", { name: /move to this stage/i }).click();
-      await expect(stage.getByText(/is now "quoted"/i)).toBeVisible();
+      await expect(stage.getByText(/is now at "quoted"/i)).toBeVisible();
     });
 
     await test.step("accept it, which offers the engagement as the next step", async () => {
@@ -428,7 +428,7 @@ test.describe("the intake pipeline, end to end", () => {
       await stage.locator("select#enquiry-stage").selectOption("accepted");
       await stage.locator("#enquiry-stage-reason").fill("Client accepted the quotation");
       await stage.getByRole("button", { name: /move to this stage/i }).click();
-      await expect(stage.getByText(/is now "accepted"/i)).toBeVisible();
+      await expect(stage.getByText(/is now at "accepted"/i)).toBeVisible();
 
       await page.goto(enquiryUrl);
       await expect(
@@ -442,9 +442,29 @@ test.describe("the intake pipeline, end to end", () => {
     });
 
     await test.step("create the engagement as a draft", async () => {
-      await page.goto("/engagements/new");
+      /*
+       * Reached from the accepted enquiry, which is the journey PRD 4.4
+       * describes and the only route that records where the instruction came
+       * from. The enquiry page's own link carries `?enquiryId=`, and the
+       * form defaults its enquiry picker from it.
+       *
+       * Going straight to /engagements/new leaves the picker on "Not from an
+       * enquiry", so the engagement is created with no enquiry. That matters
+       * for more than provenance: the approval gate resolves a conflict
+       * check by `engagement_id` or by the engagement's `enquiry_id`, so an
+       * engagement with neither can never see the clearance obtained at
+       * intake. The next step asserts it cannot be self-approved, and was
+       * instead being told no conflict check had been run at all.
+       */
+      await page.goto(enquiryUrl);
+      await settled(page);
+      await page.getByRole("link", { name: /create the engagement/i }).click();
+      await page.waitForURL(/\/engagements\/new/);
       await settled(page);
       await expect(page.getByText(/It starts as a draft/i)).toBeVisible();
+
+      // Carried through from the enquiry, not chosen here.
+      await expect(page.locator("select#enquiryId")).not.toHaveValue("");
 
       await selectContaining(page.getByLabel(/^Client\*?$/), stamp);
       await fill(page, "Title", TITLE);

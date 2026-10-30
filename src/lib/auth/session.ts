@@ -57,8 +57,23 @@ import {
  */
 function isRetryableAuthFailure(error: { status?: number } | null): boolean {
   if (!error) return false;
-  if (error.status === undefined) return true;
-  return error.status === 429 || error.status === 408 || error.status >= 500;
+
+  // No status, or a zero one. Supabase reports a transport failure as
+  // `status: 0` rather than leaving it undefined, which is not a thing HTTP
+  // can return and so cannot mean "the token is bad". Checking only for
+  // `undefined` let a dropped connection sign people out: the log line below
+  // read `status=0 code=none fetch failed` while the database was throwing
+  // ECONNRESET, and the session was cleared on the strength of it.
+  if (error.status === undefined || error.status === 0) return true;
+
+  // Anything that is not a real HTTP status is in the same category.
+  if (error.status < 100) return true;
+
+  // "Ask again shortly", not "you are not signed in".
+  if (error.status === 408 || error.status === 429) return true;
+
+  // The service itself is unwell, which says nothing about the caller.
+  return error.status >= 500;
 }
 
 export interface Actor {

@@ -29,7 +29,7 @@ node --env-file=.env.local scripts/check-coexistence.mjs     # website untouched
 | M4 | Documents, evidence and chain of custody | Done, verified |
 | M5 | Intelligence: entities, sources, information, findings | Done, verified |
 | M6 | Reporting, QA, closure, archive, management reports | Done, verified end to end |
-| M7 | Notifications, dashboards, AI gateway | Not started |
+| M7 | Notifications, dashboards, AI gateway | Notification foundation done, rest in progress |
 | M8 | Hardening and the PRD 20.1 acceptance demo | Not started |
 
 Sections not yet built render an honest placeholder naming their milestone and
@@ -745,6 +745,97 @@ rate and revenue against cost. Two points of care:
   the archive links to the same case record, and that the management reports
   and their CSV export are now reachable by the manager they are written for
   and refused to an investigator.
+
+---
+
+## M7: notifications, dashboards and AI
+
+PRD 12, 11, 4 and 22; screens 2, 3, 4 and 23. In progress. The notification
+foundation is in place and the rest of the milestone builds on it.
+
+### Database
+
+`0053_notifications.sql`. Four tables and a catalogue: `notify.categories`
+(PRD 12.1's thirteen kinds of event, three of them marked mandatory),
+`notify.notifications` for the in-app feed, `notify.outbox` for email,
+`notify.preferences` for each person's choices, and
+`notify.delivery_events` for what a send actually did. RLS is enabled and
+forced on all of them, and the feed policy is the narrowest in the platform:
+a person reads their own rows and nobody else's, with no administrative
+exception, because a notification names what somebody is working on.
+
+**The outbox has no body column, deliberately.** PRD 12.2 says an email may
+carry a case reference and a link and no case content. A body column would be
+a place for case content to be stored on the way out, so instead the outbox
+holds a template name and a `params` object, and a CHECK constraint allows
+exactly five keys in it:
+
+```sql
+check (params - array['caseReference','link','categoryLabel',
+                      'recipientName','dueAt']::text[] = '{}'::jsonb)
+```
+
+Anything else fails at insert. The same rule is asserted again in
+`assertEmailCarriesNoCaseContent` at the moment before the send, which is
+belt and braces on purpose: an email is the only artefact of this platform
+that leaves it, and it leaves with no permissions attached.
+
+`NotifyInput` keeps `title` and `detail`, which may say what happened, in
+different fields from `email`, which may not. Two fields rather than one body
+is what makes the distinction hard to forget at a call site.
+
+### Email goes through the relay this project already uses
+
+The plan named Resend. The project turned out to already have custom SMTP
+configured for Supabase Auth, as `noreply@primaddc.com` through
+`server.aveshost.net`, sending as "Prima Due Diligence Consult". Every
+password reset and invitation PDDC has ever sent went that way, so its SPF,
+DKIM and DMARC records are already correct and its reputation is already
+established.
+
+Standing up a second sender would have meant a second domain to
+authenticate, a second set of DNS records to keep right, and two addresses
+writing to the same people about the same system. One sender identity is
+worth more than the convenience of an HTTPS API, so
+`modules/notify/infrastructure/smtp-email.ts` implements `EmailPort` over
+nodemailer and only `SMTP_PASSWORD` has to be supplied. Resend stays behind
+the same port.
+
+**Two things PRD 12.2 asks for are not available on this transport, and PDDC
+should decide whether to accept them or to fund Resend for them.**
+
+- *An idempotency key passed to the provider, so retries never duplicate.*
+  SMTP has nothing to pass it to. The guarantee is enforced on our side
+  instead: the outbox row is claimed before the send and its status leaves
+  `queued`, so a second worker cannot take it. A crash between the send and
+  the status write could still duplicate one message, which is the right way
+  round for an alert: a notification seen twice is a nuisance, a missed
+  safety check-in is not. The key still goes out as
+  `X-PDDC-Idempotency-Key`, which makes a duplicate visible in a mailbox
+  rather than silent.
+- *`delivered` and `bounced`, which arrive by webhook.* Over SMTP we learn
+  only that the relay accepted the message, so a send reaches `sent` and
+  stops there. A bounce comes back to the mailbox rather than to the
+  platform.
+
+### Rules, tested as rules
+
+`modules/notify/domain/policies.test.ts`, twenty-two cases. The retry
+backoff is 1, 4, 16 and 64 minutes and then a dead letter rather than a
+forever loop. An absent preference means on, so a new employee is not
+silently unreachable. The three mandatory categories (`security_alert`,
+`safety_check_in_missed`, `integrity_failure`) deliver even when switched
+off, and the preferences screen refuses to switch them off rather than
+pretending to. The idempotency key is derived from the notification id, not
+from recipient and category, because the latter would have collapsed two
+genuine alerts about the same kind of event into one.
+
+### Still to come in this milestone
+
+The notification repository and the outbox worker, the in-app feed and the
+preferences screen, wiring the real producers, PRD 11's six role dashboards,
+global search, and the AI gateway with its router, quotas, redaction and
+grounded assistant.
 
 ---
 
@@ -1725,6 +1816,60 @@ by inspecting the live platform rather than by reading documentation:
     none of them was reachable from the integration tests, which call use
     cases directly and never post a form.
 
+85. **Two permissions PRD 16 grants were unusable, because enforcement asked
+    for a second one nobody had.** Both were invisible to the integration
+    suite, which connects as `postgres` and so bypasses the policies that
+    were doing the refusing. Only a journey driven through the browser as a
+    real role could find them.
+
+    An investigator could register a piece of evidence and then not record
+    the file they had just uploaded. Attaching a file was an `UPDATE` on
+    `evidence.evidence_items`, and that table's update policy requires
+    `evidence:edit`; PRD 16 gives the investigator `upload`, not `edit`.
+    Widening the policy would have handed them every other edit on the
+    register, so migration 0051 added
+    `evidence.record_uploaded_file(...)`, a SECURITY DEFINER function that
+    checks `evidence:upload` and `casework.can_reach_case`, and refuses a
+    second call on a row that already has a file. Write-once, and the
+    narrower permission is enough.
+
+    The staff directory returned exactly one name, the reader's own, to
+    everybody. `iam.users`' select policy requires `users:view`, which is an
+    administrative permission, so every assignment picker in the product
+    offered a single option. Migration 0052 added `iam.staff_directory()`,
+    returning id and name only, for active users only, to active IIMS users
+    only. A name is not a privilege, and a case cannot be assigned without
+    one.
+
+    With migration 0046, which took `entities:merge` off a role that lacked
+    the `entities:edit` the merge screen needs, that is three places where
+    the permission catalogue and the enforcement layer disagreed about what a
+    role could do. The catalogue was right in all three.
+
+86. **A test renamed a lifecycle stage in the live database.** The stage
+    picker was selected with `hasText: "Analysis"`, which substring-matches
+    "Analysis and Review", so a journey editing what it thought was one
+    stage edited another and left PRD 4.2's names wrong for everybody.
+    Migration 0050 restored all fourteen by key and asserts both the count
+    and that no two names collide; the journey now selects by key. The
+    broader lesson is about tests against a live project: a fixture that
+    writes to a shared catalogue needs an identifier, not a label, and the
+    test's own names need a per-attempt stamp so a retry cannot inherit the
+    previous attempt's rubble.
+
+87. **A stray control character made an assertion unmatchable, and I blamed
+    the product for it.** A regex written through a shell heredoc came out as
+    `/^Verified\x08/` with a literal backspace in it. The test could never
+    pass, and I spent a run deciding that evidence verification was broken
+    before reading the pattern that was failing. It was not broken: the
+    server reads the stored object back, recomputes the SHA-256 and writes
+    `verified`, `computed_sha256` and `verified_at`, and it does so
+    **asynchronously**, measured at about 108 seconds on this project, which
+    is why the step now reloads and polls rather than asserting once. A sweep
+    found no other stray control characters in the codebase. Heredoc editing
+    has now silently corrupted a file twice, so anything carrying a backslash
+    gets written with an editor and read back.
+
 ---
 
 ## Performance, measured
@@ -1792,26 +1937,22 @@ Pro that the evidence store needs anyway.
 
 ## Outstanding and known limitations
 
-- **Three seeded permissions exceed PRD 16's default matrix, and this is for
-  PDDC to decide rather than for me to change.** `cases:delete`,
-  `clients:delete` and `engagements:delete` are granted to the Operations
-  Manager. PRD 16 uses X, its soft-delete letter, in exactly one cell of the
-  whole matrix, "Users and roles" for CEO/Admin, and gives the Operations
-  Manager `V C E A` on both of those rows. So the seed is wider than the
-  document's stated default.
+- **Three seeded permissions have been narrowed to match PRD 16, and PDDC may
+  widen them again.** `cases:delete`, `clients:delete` and
+  `engagements:delete` were granted to the Operations Manager. PRD 16 uses X,
+  its soft-delete letter, in exactly one cell of the whole matrix, "Users and
+  roles" for CEO/Admin, and gives the Operations Manager `V C E A` on both of
+  those rows, so the seed was wider than the document's stated default.
 
-  It is not obviously wrong, which is why it is here rather than fixed: an
-  Operations Manager who creates a client can plausibly be the person who
-  removes one created in error, every deletion is soft, reversible from the
-  recycle bin and audited, and PRD 16 itself says the matrix is "the default
-  starting set" that an administrator may change. But the seed IS the default
-  starting set, so it should match the document, and narrowing a live
-  permission is a decision with a visible consequence for whoever currently
-  relies on it.
-
-  My recommendation: narrow all three to the administrator, matching PRD 16,
-  and let PDDC widen them through the Permission Builder if they want to. The
-  change is one migration and no application code.
+  It was not obviously wrong: an Operations Manager who creates a client can
+  plausibly be the person who removes one created in error, every deletion is
+  soft, reversible from the recycle bin and audited, and PRD 16 itself calls
+  the matrix "the default starting set" that an administrator may change. But
+  the seed IS that default starting set, so it should match the document.
+  Migration 0045 removes the three grants and keeps the catalogue rows, so the
+  Permission Builder can hand them back in one click if PDDC want them.
+  Recorded here because narrowing a live permission has a visible consequence
+  for whoever was relying on it.
 
   Everything else checks out. `tests/integration/permission-catalogue.test.ts`
   now compares every gate in the source against the catalogue in both
@@ -1870,6 +2011,19 @@ Pro that the evidence store needs anyway.
   has the full reasoning. If PDDC want the record restricted as well, it is
   one line there plus a ceiling in the role catalogue, and they should know it
   means the case team cannot read what the source told them.
+- **Email delivery cannot be confirmed on this transport.** Notifications go
+  out through the SMTP relay the project already uses for its authentication
+  emails, which reports only that it accepted the message. PRD 12.2's
+  `delivered` and `bounced` statuses arrive by provider webhook and SMTP has
+  none, so a send reaches `sent` and stops there, and a bounce comes back to
+  the mailbox rather than to the platform. Provider-side idempotency is
+  likewise unavailable and is enforced on our side instead. Both are set out
+  in the M7 section above. For PDDC to accept, or to fund Resend for.
+- **`SMTP_PASSWORD` must be set** in `.env.local` and in the production
+  environment before any notification email can be sent. It is the password
+  for `noreply@primaddc.com` on `server.aveshost.net`, the same relay this
+  Supabase project already authenticates with. In-app notifications do not
+  depend on it: they are written in the business transaction.
 - **Credentials pasted into chat** (service-role key, database password) should
   be rotated.
 - **End-to-end fixtures are real accounts** in the shared project, named

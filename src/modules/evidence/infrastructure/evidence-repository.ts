@@ -474,19 +474,36 @@ export function createEvidenceRepository(
           );
         }
 
+        /*
+         * Through a function, because PRD 16 gives the Investigator upload
+         * and not edit.
+         *
+         * This was a plain UPDATE, and the update policy on
+         * `evidence.evidence_items` asks for `evidence:edit`. So the person
+         * who collects an exhibit and uploads it, which PRD 16 says is
+         * theirs to do, could not record it: the browser hashed the file,
+         * the object reached the bucket, row-level security refused the
+         * write, and the item went on saying "No file" with the bytes
+         * orphaned behind it. An administrator driving the same screens
+         * succeeded, which is why it stayed hidden.
+         *
+         * Widening the policy to uploaders was rejected: row-level security
+         * cannot say which columns a statement may touch, so it would have
+         * let an uploader rewrite the item's description and classification
+         * too. `evidence.record_uploaded_file` makes exactly this one write,
+         * checking `evidence:upload` and case reach as the policy would.
+         * See migration 0051.
+         */
         await sql`
-          update evidence.evidence_items set
-            file_name = ${input.fileName},
-            file_type = ${input.fileType},
-            file_size = ${input.fileSize},
-            declared_sha256 = ${input.declaredSha256},
-            storage_bucket = ${input.storageBucket},
-            storage_path = ${input.storagePath},
-            integrity_status = 'hash_unverified',
-            computed_sha256 = null,
-            verified_at = null,
-            updated_by = ${actor.userId}::uuid
-          where id = ${id}::uuid
+          select evidence.record_uploaded_file(
+            ${id}::uuid,
+            ${input.fileName},
+            ${input.fileType},
+            ${input.fileSize}::bigint,
+            ${input.declaredSha256},
+            ${input.storageBucket},
+            ${input.storagePath}
+          )
         `;
 
         await sql`
